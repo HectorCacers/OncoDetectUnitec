@@ -1,0 +1,438 @@
+{
+  "metadata": {
+    "system": "OncoDetect",
+    "version": "1.0.0-prototype",
+    "description": "Matriz síntoma-cáncer-nivel de sospecha clínica para tamizaje pediátrico",
+    "basis": "Criterios OMS/SIOP – 6 cánceres infantiles índice",
+    "primary_source": "OPS (2025). Early Diagnosis of Cancer in Children and Adolescents.",
+    "regulatory_framework": "OMS (2021) Ethics and Governance of AI for Health; IMDRF (2025)",
+    "disclaimer": "Herramienta educativo-informativa. NO emite diagnósticos médicos.",
+    "suspicion_levels": {
+      "1": {
+        "label": "Baja Sospecha",
+        "action": "Observación activa. Reevaluar si persiste o se suman síntomas."
+      },
+      "2": {
+        "label": "Sospecha Moderada",
+        "action": "Consulta médica de primer nivel. Descartar causas comunes."
+      },
+      "3": {
+        "label": "Alta Sospecha",
+        "action": "Referencia a segundo nivel en 48-72 horas. Documentar hallazgos."
+      },
+      "4": {
+        "label": "Alarma – Referencia Urgente",
+        "action": "Referencia INMEDIATA al nivel especializado oncológico."
+      }
+    },
+    "aggregation_rules": {
+      "description": "Reglas de composición sintomática para elevación de nivel",
+      "rules": [
+        {
+          "id": "AGG-01",
+          "condition": "3 o más síntomas de nivel 2 del mismo cáncer",
+          "result_level": 3
+        },
+        {
+          "id": "AGG-02",
+          "condition": "2 o más síntomas de nivel 3 del mismo cáncer",
+          "result_level": 4
+        },
+        {
+          "id": "AGG-03",
+          "condition": "1 síntoma con discriminator_unique = true",
+          "result_level": "el nivel asignado al síntoma se aplica directamente sin necesidad de combinación"
+        }
+      ]
+    }
+  },
+  "cancers": [
+    {
+      "id": "LLA",
+      "name": "Leucemia Linfoblástica Aguda",
+      "age_group": "2–5 años (pico); cualquier edad pediátrica",
+      "ops_action_level": "Prioritaria / Inmediata",
+      "source": "OPS (2025); Saatci et al. (2024)",
+      "symptoms": [
+        {
+          "code": "LLA-S01",
+          "label": "Palidez persistente (> 2 semanas)",
+          "suspicion_level": 2,
+          "weight": 6,
+          "discriminator_unique": false,
+          "specificity": "Media",
+          "clinical_note": "Signo hematológico cardinal de anemia en LLA. Inespecífico aislado, discriminador en combinación."
+        },
+        {
+          "code": "LLA-S02",
+          "label": "Fiebre prolongada sin foco infeccioso (> 7 días)",
+          "suspicion_level": 2,
+          "weight": 6,
+          "discriminator_unique": false,
+          "specificity": "Baja",
+          "clinical_note": "Fiebre persistente sin causa infecciosa documentada activa. Saatci et al. (2024): combinación eleva VPP."
+        },
+        {
+          "code": "LLA-S03",
+          "label": "Petequias o equimosis sin traumatismo",
+          "suspicion_level": 3,
+          "weight": 8,
+          "discriminator_unique": false,
+          "specificity": "Alta",
+          "clinical_note": "Manifestación directa de trombocitopenia. Altamente sugestivo de patología hematológica maligna."
+        },
+        {
+          "code": "LLA-S04",
+          "label": "Dolor óseo o articular difuso persistente",
+          "suspicion_level": 3,
+          "weight": 7,
+          "discriminator_unique": false,
+          "specificity": "Media",
+          "clinical_note": "Infiltración de médula ósea. Puede simular artritis o dolor musculoesquelético."
+        },
+        {
+          "code": "LLA-S05",
+          "label": "Adenopatías múltiples (> 1 región, > 2 cm)",
+          "suspicion_level": 3,
+          "weight": 7,
+          "discriminator_unique": false,
+          "specificity": "Media",
+          "clinical_note": "Linfadenopatía generalizada por infiltración leucémica. Combinación con fiebre y palidez → sospecha urgente."
+        },
+        {
+          "code": "LLA-S06",
+          "label": "Fatiga extrema / letargia desproporcionada",
+          "suspicion_level": 2,
+          "weight": 5,
+          "discriminator_unique": false,
+          "specificity": "Baja",
+          "clinical_note": "Síntoma constitucional. Bajo valor aislado, relevante en combinación multisintomática."
+        },
+        {
+          "code": "LLA-S07",
+          "label": "Hepatoesplenomegalia palpable",
+          "suspicion_level": 3,
+          "weight": 8,
+          "discriminator_unique": false,
+          "specificity": "Alta",
+          "clinical_note": "Infiltración extramedular. Signo de avance clínico. Requiere referencia inmediata."
+        },
+        {
+          "code": "LLA-S08",
+          "label": "Tríada cardinal: palidez + fiebre + petequias (≥ 3 síntomas cardinales simultáneos)",
+          "suspicion_level": 4,
+          "weight": 10,
+          "discriminator_unique": true,
+          "specificity": "Alta",
+          "clinical_note": "Tríada clásica de pancitopenia en LLA. OPS (2025) + Saatci et al. (2024): VPP significativamente mayor que síntomas aislados."
+        }
+      ]
+    },
+    {
+      "id": "BKT",
+      "name": "Linfoma de Burkitt",
+      "age_group": "5–15 años",
+      "ops_action_level": "Prioritaria",
+      "source": "OPS (2025)",
+      "symptoms": [
+        {
+          "code": "BKT-S01",
+          "label": "Masa abdominal de crecimiento rápido (días a semanas)",
+          "suspicion_level": 4,
+          "weight": 10,
+          "discriminator_unique": true,
+          "specificity": "Alta",
+          "clinical_note": "Burkitt tiene tiempo de duplicación < 24 h. Masa abdominal de rápido crecimiento es señal cardinal. Referencia inmediata."
+        },
+        {
+          "code": "BKT-S02",
+          "label": "Adenopatías cervicales o mandibulares de crecimiento rápido",
+          "suspicion_level": 3,
+          "weight": 8,
+          "discriminator_unique": false,
+          "specificity": "Alta",
+          "clinical_note": "Variante nodal del Burkitt. Diferencial con adenitis infecciosa por velocidad de crecimiento."
+        },
+        {
+          "code": "BKT-S03",
+          "label": "Fiebre + pérdida de peso (síntomas B)",
+          "suspicion_level": 2,
+          "weight": 6,
+          "discriminator_unique": false,
+          "specificity": "Baja",
+          "clinical_note": "Síntomas constitucionales B. Presentes en variante sistémica. Inespecíficos aislados."
+        },
+        {
+          "code": "BKT-S04",
+          "label": "Distensión abdominal progresiva + dolor abdominal difuso",
+          "suspicion_level": 3,
+          "weight": 7,
+          "discriminator_unique": false,
+          "specificity": "Media",
+          "clinical_note": "Componente abdominal del Burkitt endémico. Puede confundirse con parasitosis en primer nivel."
+        },
+        {
+          "code": "BKT-S05",
+          "label": "Masa maxilofacial o tumefacción facial asimétrica",
+          "suspicion_level": 4,
+          "weight": 9,
+          "discriminator_unique": true,
+          "specificity": "Alta",
+          "clinical_note": "Presentación característica del Burkitt endémico en Centroamérica. Deformidad facial de rápida progresión."
+        }
+      ]
+    },
+    {
+      "id": "LH",
+      "name": "Linfoma de Hodgkin",
+      "age_group": "10–19 años",
+      "ops_action_level": "Prioritaria",
+      "source": "OPS (2025)",
+      "symptoms": [
+        {
+          "code": "LH-S01",
+          "label": "Adenopatías cervicales o supraclaviculares indoloras (> 2 cm, > 4 semanas)",
+          "suspicion_level": 4,
+          "weight": 9,
+          "discriminator_unique": true,
+          "specificity": "Alta",
+          "clinical_note": "La INDOLENCIA es el marcador discriminador clave frente a adenitis infecciosa. Nodo supraclavicular indoloro → sospecha oncológica casi absoluta."
+        },
+        {
+          "code": "LH-S02",
+          "label": "Fiebre Pel-Ebstein (cíclica, ondulante)",
+          "suspicion_level": 3,
+          "weight": 8,
+          "discriminator_unique": true,
+          "specificity": "Alta",
+          "clinical_note": "Patrón febril cíclico característico del Hodgkin. Altamente discriminador en combinación con adenopatía."
+        },
+        {
+          "code": "LH-S03",
+          "label": "Sudoración nocturna profusa (empapa la ropa)",
+          "suspicion_level": 2,
+          "weight": 6,
+          "discriminator_unique": false,
+          "specificity": "Media",
+          "clinical_note": "Síntoma B clásico del Hodgkin. Parte de la tríada B junto con fiebre y pérdida de peso."
+        },
+        {
+          "code": "LH-S04",
+          "label": "Pérdida de peso involuntaria > 10% en 6 meses",
+          "suspicion_level": 2,
+          "weight": 6,
+          "discriminator_unique": false,
+          "specificity": "Media",
+          "clinical_note": "Síntoma B. Relevante en combinación con adenopatía supraclavicular indolora."
+        },
+        {
+          "code": "LH-S05",
+          "label": "Masa mediastínica / disnea progresiva sin causa infecciosa",
+          "suspicion_level": 4,
+          "weight": 9,
+          "discriminator_unique": true,
+          "specificity": "Alta",
+          "clinical_note": "Adenopatía mediastínica puede generar compresión de vía aérea. Emergencia oncológica en primer nivel."
+        },
+        {
+          "code": "LH-S06",
+          "label": "Prurito generalizado sin causa dermatológica",
+          "suspicion_level": 2,
+          "weight": 5,
+          "discriminator_unique": false,
+          "specificity": "Baja",
+          "clinical_note": "Síntoma paraneoplásico en Hodgkin. Bajo VPP aislado, relevante en contexto multisintomático."
+        },
+        {
+          "code": "LH-S07",
+          "label": "Tríada B completa + adenopatía supraclavicular indolora",
+          "suspicion_level": 4,
+          "weight": 10,
+          "discriminator_unique": true,
+          "specificity": "Alta",
+          "clinical_note": "Tríada B completa (fiebre + sudoración + pérdida de peso) con adenopatía supraclavicular = referencia urgente sin demora."
+        }
+      ]
+    },
+    {
+      "id": "TW",
+      "name": "Tumor de Wilms (Nefroblastoma)",
+      "age_group": "1–5 años (pico 3 años)",
+      "ops_action_level": "Inmediata",
+      "source": "OPS (2025)",
+      "symptoms": [
+        {
+          "code": "TW-S01",
+          "label": "Masa abdominal unilateral palpable, firme, no dolorosa",
+          "suspicion_level": 4,
+          "weight": 10,
+          "discriminator_unique": true,
+          "specificity": "Alta",
+          "clinical_note": "Signo cardinal del Tumor de Wilms. Masa renal unilateral en niño < 5 años = referencia urgente. NO palpar repetidamente (riesgo de diseminación)."
+        },
+        {
+          "code": "TW-S02",
+          "label": "Hematuria macroscópica (orina rosada o roja)",
+          "suspicion_level": 3,
+          "weight": 8,
+          "discriminator_unique": false,
+          "specificity": "Alta",
+          "clinical_note": "Hematuria en niño < 5 años con masa abdominal = sospecha de Wilms hasta descartar."
+        },
+        {
+          "code": "TW-S03",
+          "label": "Hipertensión arterial sin causa evidente en menor de 5 años",
+          "suspicion_level": 3,
+          "weight": 7,
+          "discriminator_unique": false,
+          "specificity": "Alta",
+          "clinical_note": "HTA en nefroblastoma por compresión vascular renal. Signo a buscar activamente en primer nivel."
+        },
+        {
+          "code": "TW-S04",
+          "label": "Dolor abdominal localizado en flanco",
+          "suspicion_level": 2,
+          "weight": 5,
+          "discriminator_unique": false,
+          "specificity": "Baja",
+          "clinical_note": "Menos frecuente. Presente en estadios avanzados. Inespecífico aislado."
+        },
+        {
+          "code": "TW-S05",
+          "label": "Aniridia / hemihipertrofia / anomalías genitourinarias congénitas",
+          "suspicion_level": 4,
+          "weight": 9,
+          "discriminator_unique": true,
+          "specificity": "Alta",
+          "clinical_note": "Factores de riesgo conocidos para Wilms. Requieren seguimiento oncológico activo desde el diagnóstico de la anomalía."
+        }
+      ]
+    },
+    {
+      "id": "RB",
+      "name": "Retinoblastoma",
+      "age_group": "Menores de 5 años (60% menores de 2 años)",
+      "ops_action_level": "Inmediata",
+      "source": "OPS (2025); Byroju et al. (2023); Leander et al. (2007)",
+      "symptoms": [
+        {
+          "code": "RB-S01",
+          "label": "Leucocoria (reflejo pupilar blanco / ojo de gato)",
+          "suspicion_level": 4,
+          "weight": 10,
+          "discriminator_unique": true,
+          "specificity": "Alta",
+          "clinical_note": "Signo discriminador ÚNICO más frecuente del retinoblastoma (60% de casos). Detectable SIN equipamiento especializado (reflejo fotográfico). Leander et al. (2007): 73% de casos en Honduras eran extraoculares por detección tardía."
+        },
+        {
+          "code": "RB-S02",
+          "label": "Estrabismo de nuevo inicio (sin antecedente previo)",
+          "suspicion_level": 3,
+          "weight": 8,
+          "discriminator_unique": false,
+          "specificity": "Alta",
+          "clinical_note": "Segunda presentación más frecuente del RB (20%). Siempre descartar causa tumoral en menores de 5 años. Byroju et al. (2023)."
+        },
+        {
+          "code": "RB-S03",
+          "label": "Ojo rojo persistente sin causa infecciosa documentada",
+          "suspicion_level": 2,
+          "weight": 6,
+          "discriminator_unique": false,
+          "specificity": "Media",
+          "clinical_note": "Ojo rojo en RB avanzado por neovascularización o glaucoma secundario. Leander et al. (2007): confusión frecuente con conjuntivitis en Honduras."
+        },
+        {
+          "code": "RB-S04",
+          "label": "Pérdida visible de visión / nistagmo",
+          "suspicion_level": 3,
+          "weight": 7,
+          "discriminator_unique": false,
+          "specificity": "Alta",
+          "clinical_note": "Compromiso visual avanzado. Asociado a mayor estadio clínico. Byroju et al. (2023)."
+        },
+        {
+          "code": "RB-S05",
+          "label": "Historia familiar de retinoblastoma (padre o hermano)",
+          "suspicion_level": 4,
+          "weight": 10,
+          "discriminator_unique": true,
+          "specificity": "Alta",
+          "clinical_note": "Forma hereditaria (RB1 germinal). Requiere tamizaje oftalmológico desde el nacimiento. Historia familiar = referencia urgente independiente de síntomas actuales. Byroju et al. (2023)."
+        }
+      ]
+    },
+    {
+      "id": "GBG",
+      "name": "Glioma de Bajo Grado",
+      "age_group": "Cualquier edad pediátrica (pico 5–14 años)",
+      "ops_action_level": "Prioritaria",
+      "source": "OPS (2025); Irshad et al. (2025)",
+      "symptoms": [
+        {
+          "code": "GBG-S01",
+          "label": "Cefalea persistente > 4 semanas (especialmente matutina o que despierta al niño)",
+          "suspicion_level": 2,
+          "weight": 6,
+          "discriminator_unique": false,
+          "specificity": "Baja",
+          "clinical_note": "Cefalea aislada inespecífica. El patrón matutino y la cronicidad elevan la sospecha. Irshad et al. (2025): síntomas inespecíficos = 62.5% de causa de retraso diagnóstico en tumores cerebrales pediátricos en LMICs."
+        },
+        {
+          "code": "GBG-S02",
+          "label": "Vómitos matutinos en proyectil sin causa gastrointestinal",
+          "suspicion_level": 3,
+          "weight": 8,
+          "discriminator_unique": false,
+          "specificity": "Alta",
+          "clinical_note": "Signo de hipertensión intracraneana. Combinación con cefalea matutina = elevación significativa del nivel de sospecha."
+        },
+        {
+          "code": "GBG-S03",
+          "label": "Alteraciones visuales progresivas (visión doble, pérdida de campo visual)",
+          "suspicion_level": 3,
+          "weight": 8,
+          "discriminator_unique": false,
+          "specificity": "Alta",
+          "clinical_note": "Compresión del nervio óptico o quiasma. Común en glioma óptico asociado a NF1."
+        },
+        {
+          "code": "GBG-S04",
+          "label": "Cambios en la marcha / ataxia / torpeza motora progresiva",
+          "suspicion_level": 3,
+          "weight": 8,
+          "discriminator_unique": false,
+          "specificity": "Alta",
+          "clinical_note": "Afección cerebelosa o del tallo. Signo de localización tumoral de alto valor clínico en primer nivel."
+        },
+        {
+          "code": "GBG-S05",
+          "label": "Convulsiones de novo (sin antecedente de epilepsia)",
+          "suspicion_level": 3,
+          "weight": 9,
+          "discriminator_unique": false,
+          "specificity": "Alta",
+          "clinical_note": "Crisis convulsiva de nuevo inicio sin epilepsia previa requiere descarte de masa intracraneana. Irshad et al. (2025)."
+        },
+        {
+          "code": "GBG-S06",
+          "label": "Cambios conductuales o de personalidad progresivos inexplicables",
+          "suspicion_level": 2,
+          "weight": 5,
+          "discriminator_unique": false,
+          "specificity": "Baja",
+          "clinical_note": "Afección de lóbulos frontales o temporales. Baja especificidad aislada, relevante en combinación."
+        },
+        {
+          "code": "GBG-S07",
+          "label": "Tríada de hipertensión intracraneana: cefalea matutina + vómitos + alteración visual o de marcha",
+          "suspicion_level": 4,
+          "weight": 10,
+          "discriminator_unique": true,
+          "specificity": "Alta",
+          "clinical_note": "Tríada clásica de HTIC = referencia neurológica urgente. Irshad et al. (2025): combinación aumenta significativamente el VPP en contexto de LMICs."
+        }
+      ]
+    }
+  ]
+}

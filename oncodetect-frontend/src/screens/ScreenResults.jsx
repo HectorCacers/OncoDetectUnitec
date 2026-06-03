@@ -1,0 +1,86 @@
+import { LEVEL_LABELS, LEVEL_SIMPLE } from "../data/clinicalData";
+import { generatePDF } from "../utils/pdfUtils";
+
+export default function ScreenResults({ state }) {
+  const {
+    results, userMode, patientData, patientFullName, patientIdentidad,
+    ageFormatted, dobFormatted, patientDepto, patientMunicipio,
+    selectedSymptoms, uniqueCareCodes,
+    email, setEmail, emailStatus, showEmailInput, setShowEmailInput,
+    handleSendEmail, handleReset
+  } = state;
+
+  const sorted       = [...results].sort((a, b) => b.suspicionLevel - a.suspicionLevel);
+  const symptomsForPDF = userMode === "medico" ? selectedSymptoms : uniqueCareCodes;
+
+  return (
+    <>
+      <header className="app-header">
+        <div className="header-logo">Onco<span>Detect</span></div>
+        <div className="header-badge">Resultados</div>
+        <div className={`header-profile ${userMode}`}>{userMode === "medico" ? "🩺 Modo Médico" : "👨‍👩‍👧 Modo Cuidador"}</div>
+      </header>
+      <div className="main-container results-section">
+        <div className="info-banner">
+          ⚠️ <strong>Aviso:</strong> Los resultados son orientativos y deben ser interpretados por personal de salud calificado.
+        </div>
+        <div className="card">
+          <div className="card-title"><div className="card-title-icon">📋</div>Resumen de la Evaluación</div>
+          <p style={{fontSize:"14px",color:"var(--muted)",marginBottom:"4px"}}><strong style={{color:"var(--navy)"}}>Paciente:</strong> {patientFullName}</p>
+          {patientIdentidad && <p style={{fontSize:"14px",color:"var(--muted)",marginBottom:"4px"}}><strong style={{color:"var(--navy)"}}>N.º de identidad:</strong> {patientIdentidad}</p>}
+          <p style={{fontSize:"14px",color:"var(--muted)",marginBottom:"4px"}}><strong style={{color:"var(--navy)"}}>Fecha de nacimiento:</strong> {dobFormatted}</p>
+          <p style={{fontSize:"14px",color:"var(--muted)",marginBottom:"4px"}}><strong style={{color:"var(--navy)"}}>Edad:</strong> {ageFormatted}</p>
+          <p style={{fontSize:"14px",color:"var(--muted)",marginBottom:"4px"}}><strong style={{color:"var(--navy)"}}>Procedencia:</strong> {patientDepto}{patientMunicipio ? `, ${patientMunicipio}` : ""}</p>
+          <p style={{fontSize:"14px",color:"var(--muted)"}}><strong style={{color:"var(--navy)"}}>Síntomas evaluados:</strong> {symptomsForPDF.length} síntoma(s)</p>
+        </div>
+        <div className="card">
+          <div className="card-title"><div className="card-title-icon">🔬</div>Niveles de Sospecha por Cáncer</div>
+          {sorted.map((r) => (
+            <div key={r.cancerId} className={`result-card level-${r.suspicionLevel}`}>
+              <div className="result-header">
+                <div className="result-cancer-name">{r.cancerName}</div>
+                <div className={`level-badge badge-${r.suspicionLevel}`}>Nivel {r.suspicionLevel} — {LEVEL_LABELS[r.suspicionLevel]}</div>
+              </div>
+              <div className="result-simple">
+                <span className="result-simple-label">En términos simples</span>
+                {LEVEL_SIMPLE[r.suspicionLevel]}
+              </div>
+              {userMode === "cuidador" && <p className="tech-note">Información técnica para mostrar al médico:</p>}
+              <div className="result-technical">
+                <strong>Interpretación técnica:</strong> Score: <strong>{r.totalScore}</strong> pts ·
+                Discriminadores: <strong>{r.uniqueDiscriminators}</strong> ·
+                Reglas: <strong>{r.aggregationRules?.join(", ") || "Ninguna"}</strong>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="card">
+          <div className="card-title"><div className="card-title-icon">📤</div>Exportar Resultados</div>
+          <div className="actions-row">
+            <button className="action-btn btn-pdf" onClick={() => generatePDF(patientData, symptomsForPDF, sorted, userMode)}>
+              🖨️ Generar PDF / Imprimir
+            </button>
+            <button className="action-btn btn-email" onClick={() => { setShowEmailInput(!showEmailInput); setEmail(""); }}>
+              ✉️ Enviar por Correo
+            </button>
+            <button className="action-btn btn-reset" onClick={handleReset}>🔄 Nueva Evaluación</button>
+          </div>
+          {showEmailInput && (
+            <div style={{marginTop:"18px"}}>
+              <label>Correo electrónico destinatario</label>
+              <div className="email-input-row">
+                <input type="email" className="input-field" placeholder="ejemplo@correo.com"
+                  value={email} onChange={(e) => setEmail(e.target.value)} />
+                <button className="send-btn" onClick={handleSendEmail} disabled={emailStatus === "sending" || !email}>
+                  {emailStatus === "sending" ? "Enviando..." : "Enviar"}
+                </button>
+              </div>
+              {emailStatus === "ok"  && <div className="toast toast-success">✅ Reporte enviado a {email}</div>}
+              {emailStatus === "err" && <div className="toast toast-error">❌ No se pudo enviar. Verifique la dirección.</div>}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
