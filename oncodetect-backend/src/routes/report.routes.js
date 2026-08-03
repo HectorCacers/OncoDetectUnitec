@@ -1,7 +1,15 @@
-const express = require('express');
-const { Resend } = require('resend');
+const express   = require('express');
+const nodemailer = require('nodemailer');
 
 const router = express.Router();
+
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD,
+  },
+});
 
 
 // ─── POST /send-report ────────────────────────────────────────────────────────
@@ -51,17 +59,12 @@ router.post('/', async (req, res) => {
   if (!recipientEmail) return res.status(400).json({ error: 'recipientEmail es requerido.' });
   if (!reportHtml)     return res.status(400).json({ error: 'reportHtml es requerido.' });
   try {
-    const resend = new Resend(process.env.RESEND_API_KEY);
-    const { error } = await resend.emails.send({
-      from:    'OncoDetect <onboarding@resend.dev>',
-      to:      [recipientEmail],
+    await transporter.sendMail({
+      from:    `OncoDetect <${process.env.GMAIL_USER}>`,
+      to:      recipientEmail,
       subject: `OncoDetect — Reporte de ${patientName || 'Paciente'} (${evaluationDate || ''})`,
       html:    reportHtml,
     });
-    if (error) {
-      console.error('[/send-report] Resend error:', error);
-      return res.status(500).json({ error: 'Error al enviar el correo.', detail: error.message });
-    }
     console.log(`[/send-report] Correo enviado a ${recipientEmail}`);
     res.json({ ok: true, message: `Reporte enviado a ${recipientEmail}` });
   } catch (err) {
