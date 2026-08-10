@@ -1,5 +1,7 @@
 import { CANCERS, SYMPTOMS_BY_CANCER, SYMPTOMS_CAREGIVER } from "../data/clinicalData";
 import { DEPARTAMENTOS_HN, MUNICIPIOS_HN } from "../data/locationData";
+import { audioUrlFor } from "../data/audioData";
+import AudioButton from "../components/AudioButton";
 
 export default function ScreenForm({ state }) {
   const {
@@ -178,14 +180,19 @@ export default function ScreenForm({ state }) {
         {userMode === "cuidador" && canProceedAge && (
           <div className="card">
             <div className="card-title"><div className="card-title-icon">🩺</div>¿Qué síntomas presenta el niño?</div>
-            <p style={{fontSize:"13px",color:"var(--muted)",marginBottom:"24px"}}>Marque todo lo que haya notado en el niño en las últimas semanas.</p>
+            <div className="caregiver-audio-note">
+              <span className="caregiver-audio-note-icon">🔊</span>
+              <span>Presiona el <strong>altavoz</strong> para escuchar cada síntoma en voz alta.</span>
+            </div>
+            <p style={{fontSize:"13px",color:"var(--muted)",marginBottom:"24px"}}>Toca la tarjeta para marcarla. Marca solo lo que hayas notado en las últimas semanas.</p>
             {SYMPTOMS_CAREGIVER.map((group) => (
               <div key={group.category} className="cat-group">
                 <div className="cat-header">{group.category}</div>
                 {group.symptoms.map((s) => (
-                  <div key={s.id} className={`parent-chip ${selectedCareSymptoms.includes(s.id) ? "selected" : ""}`} onClick={() => toggleCareSymptom(s.id)}>
+                  <div key={s.id} className={`parent-chip caregiver-chip ${selectedCareSymptoms.includes(s.id) ? "selected" : ""}`} onClick={() => toggleCareSymptom(s.id)}>
                     <div className="parent-checkbox" />
                     <div className="parent-label">{s.label}</div>
+                    <AudioButton src={audioUrlFor(s.id)} label={`Escuchar: ${s.label}`} />
                   </div>
                 ))}
               </div>
