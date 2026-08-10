@@ -83,7 +83,7 @@ app.use('/evaluations',  evaluationsRoutes);
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ OncoDetect API V5 corriendo en http://0.0.0.0:${PORT}`);
   console.log(`📋 Documentación Swagger: http://0.0.0.0:${PORT}/api-docs`);
-  console.log(`📧 Resend configurado: ${process.env.RESEND_API_KEY ? 'API key cargada' : '⚠️ RESEND_API_KEY no configurada'}`);
+  console.log(`📧 Gmail configurado: ${process.env.GMAIL_USER ? process.env.GMAIL_USER : '⚠️ GMAIL_USER no configurado'}`);
   console.log(`🔐 Auth JWT activo`);
   console.log(`🗄️  MongoDB: ${process.env.MONGODB_URI ? 'URI cargada' : '⚠️ MONGODB_URI no configurada'}`);
 });
