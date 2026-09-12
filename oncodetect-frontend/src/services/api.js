@@ -19,4 +19,9 @@ export const saveEvaluation    = (data, token) => axios.post(`${API_BASE}/evalua
 export const searchEvaluations = (query, token) => axios.get(`${API_BASE}/evaluations/search?q=${encodeURIComponent(query.trim())}`, { headers: { Authorization: `Bearer ${token}` } });
 export const getRecentEvals    = (token) => axios.get(`${API_BASE}/evaluations/recent`, { headers: { Authorization: `Bearer ${token}` } });
 export const deleteEvaluation  = (id, token) => axios.delete(`${API_BASE}/evaluations/${id}`, { headers: { Authorization: `Bearer ${token}` } });
+export const getEvaluationFHIR = (id, token) => axios.get(`${API_BASE}/evaluations/${id}/fhir`, { headers: { Authorization: `Bearer ${token}` } });
+export const getEvaluationsFHIRBulk = (token, query) => axios.get(`${API_BASE}/evaluations/fhir/bulk`, {
+  params: query && query.trim() ? { q: query.trim() } : undefined,
+  headers: { Authorization: `Bearer ${token}` },
+});
 export const bulkDelete        = (ids, token) => axios.delete(`${API_BASE}/evaluations/bulk/delete`, { data: { ids }, headers: { Authorization: `Bearer ${token}` } });

@@ -1,6 +1,7 @@
 const express      = require('express');
 const authRequired = require('../middleware/auth');
 const Evaluation   = require('../models/Evaluation');
+const { evaluationToFhirBundle, buildBulkBundle } = require('../utils/fhirTransform');
 
 const router = express.Router();
 
@@ -273,6 +274,121 @@ router.delete('/:id', authRequired, async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: 'Error al eliminar la evaluación.' });
+  }
+});
+
+// ─── GET /evaluations/fhir/bulk ───────────────────────────────────────────────
+/**
+ * @swagger
+ * /evaluations/fhir/bulk:
+ *   get:
+ *     summary: Exportar TODAS las evaluaciones filtradas en FHIR R4 (masivo)
+ *     description: 🔒 **Requiere JWT**. Genera un Bundle FHIR R4 de tipo "collection" (solo modo
+ *       médico) que contiene un Bundle por cada evaluación encontrada. Acepta un query param
+ *       opcional `q` (nombre o identidad, igual que /evaluations/search) para filtrar; si no se
+ *       pasa, exporta todas las evaluaciones registradas de modo médico. NO modifica los datos.
+ *     tags: [Historial]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: q
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Nombre del paciente o número de identidad (mínimo 2 caracteres). Vacío = todas las evaluaciones.
+ *         example: "Juan"
+ *     responses:
+ *       200:
+ *         description: Bundle FHIR R4 de tipo collection con un Bundle por evaluación
+ *         content:
+ *           application/fhir+json:
+ *             example:
+ *               resourceType: "Bundle"
+ *               id: "bundle-bulk-1690000000000"
+ *               type: "collection"
+ *               total: 2
+ *       404:
+ *         description: No se encontraron evaluaciones para exportar
+ *       401:
+ *         description: Token requerido
+ */
+router.get('/fhir/bulk', authRequired, async (req, res) => {
+  try {
+    const { q } = req.query;
+    const query = { userMode: 'medico' };
+
+    // Filtro opcional por nombre o identidad (mismo criterio que /evaluations/search)
+    if (q && q.trim().length >= 2) {
+      const term = q.trim();
+      const isId = /^[\d\-]+$/.test(term);
+      if (isId) {
+        query.patientId = { $regex: term.replace(/-/g, ''), $options: 'i' };
+      } else {
+        query.patientName = { $regex: term, $options: 'i' };
+      }
+    }
+
+    const evaluations = await Evaluation.find(query).sort({ evaluationDate: -1 }).lean();
+    if (evaluations.length === 0)
+      return res.status(404).json({ error: 'No se encontraron evaluaciones para exportar.' });
+
+    const bundle = buildBulkBundle(evaluations, req.doctor && req.doctor.username);
+    console.log(`[/evaluations/fhir/bulk] ${evaluations.length} evaluación(es) → Bundle FHIR masivo`);
+    res.set('Content-Type', 'application/fhir+json');
+    res.json(bundle);
+  } catch (err) {
+    console.error('[/evaluations/fhir/bulk] Error:', err.message);
+    res.status(500).json({ error: 'Error al generar la exportación FHIR masiva.' });
+  }
+});
+
+// ─── GET /evaluations/:id/fhir ────────────────────────────────────────────────
+/**
+ * @swagger
+ * /evaluations/{id}/fhir:
+ *   get:
+ *     summary: Exportar evaluación en formato HL7 FHIR R4
+ *     description: 🔒 **Requiere JWT**. Lee una evaluación guardada en MongoDB y la transforma a un
+ *       Bundle FHIR R4 de tipo "collection" (Patient, Practitioner, Observation por síntoma y
+ *       QuestionnaireResponse). NO modifica los datos guardados.
+ *     tags: [Historial]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         example: "64a1b2c3d4e5f6a7b8c9d0e1"
+ *     responses:
+ *       200:
+ *         description: Bundle FHIR R4
+ *         content:
+ *           application/fhir+json:
+ *             example:
+ *               resourceType: "Bundle"
+ *               id: "bundle-64a1b2c3d4e5f6a7b8c9d0e1"
+ *               type: "collection"
+ *       404:
+ *         description: Evaluación no encontrada
+ *       401:
+ *         description: Token requerido
+ */
+router.get('/:id/fhir', authRequired, async (req, res) => {
+  try {
+    const evaluation = await Evaluation.findById(req.params.id).lean();
+    if (!evaluation)
+      return res.status(404).json({ error: 'Evaluación no encontrada.' });
+
+    const bundle = evaluationToFhirBundle(evaluation, req.doctor && req.doctor.username);
+    console.log(`[/evaluations/${req.params.id}/fhir] Bundle FHIR generado — paciente: ${evaluation.patientId}`);
+    res.set('Content-Type', 'application/fhir+json');
+    res.json(bundle);
+  } catch (err) {
+    console.error('[/evaluations/:id/fhir] Error:', err.message);
+    res.status(500).json({ error: 'Error al generar la exportación FHIR.' });
   }
 });
 
