@@ -1,14 +1,32 @@
+import { useState } from "react";
 import { LEVEL_LABELS, LEVEL_SIMPLE } from "../data/clinicalData";
 import { generatePDF } from "../utils/pdfUtils";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function validateEmails(raw) {
+  if (!raw || !raw.trim()) return { valid: false, errors: [] };
+  const parts = raw.split(",").map((e) => e.trim()).filter(Boolean);
+  if (parts.length === 0) return { valid: false, errors: [] };
+  const errors = parts.filter((e) => !EMAIL_RE.test(e));
+  return { valid: errors.length === 0, errors, parts };
+}
 
 export default function ScreenResults({ state }) {
   const {
     results, userMode, patientData, patientFullName, patientIdentidad,
     ageFormatted, dobFormatted, patientDepto, patientMunicipio,
     selectedSymptoms, uniqueCareCodes,
-    email, setEmail, emailStatus, showEmailInput, setShowEmailInput,
+    email, setEmail, emailStatus, setEmailStatus, showEmailInput, setShowEmailInput,
     handleSendEmail, handleReset
   } = state;
+
+  const [emailErrors, setEmailErrors] = useState([]);
+
+  const onEmailChange = (e) => {
+    setEmail(e.target.value);
+    setEmailErrors([]);
+  };
 
   const sorted       = [...results].sort((a, b) => b.suspicionLevel - a.suspicionLevel);
   const symptomsForPDF = userMode === "medico" ? selectedSymptoms : uniqueCareCodes;
@@ -60,23 +78,35 @@ export default function ScreenResults({ state }) {
             <button className="action-btn btn-pdf" onClick={() => generatePDF(patientData, symptomsForPDF, sorted, userMode)}>
               🖨️ Generar PDF / Imprimir
             </button>
-            <button className="action-btn btn-email" onClick={() => { setShowEmailInput(!showEmailInput); setEmail(""); }}>
+            <button className="action-btn btn-email" onClick={() => { setShowEmailInput(!showEmailInput); setEmail(""); setEmailStatus(null); setEmailErrors([]); }}>
               ✉️ Enviar por Correo
             </button>
             <button className="action-btn btn-reset" onClick={handleReset}>🔄 Nueva Evaluación</button>
           </div>
           {showEmailInput && (
             <div style={{marginTop:"18px"}}>
-              <label>Correo electrónico destinatario</label>
+              <label>Correo electrónico destinatario(s)</label>
+              <p style={{fontSize:"12px",color:"var(--muted)",margin:"2px 0 6px"}}>Separe varios correos con coma</p>
               <div className="email-input-row">
-                <input type="email" className="input-field" placeholder="ejemplo@correo.com"
-                  value={email} onChange={(e) => setEmail(e.target.value)} />
-                <button className="send-btn" onClick={handleSendEmail} disabled={emailStatus === "sending" || !email}>
-                  {emailStatus === "sending" ? "Enviando..." : "Enviar"}
+                <input type="text" className="input-field" placeholder="medico@correo.com, admin@correo.com"
+                  value={email} onChange={onEmailChange} />
+                <button className="send-btn" onClick={() => {
+                  const { valid, errors } = validateEmails(email);
+                  if (!valid) { setEmailErrors(errors); setEmailStatus(null); return; }
+                  setEmailErrors([]);
+                  handleSendEmail();
+                }} disabled={emailStatus === "sending" || emailStatus === "queued" || !email}>
+                  {emailStatus === "sending" ? "Enviando..." : emailStatus === "queued" ? "En cola ⏳" : "Enviar"}
                 </button>
               </div>
-              {emailStatus === "ok"  && <div className="toast toast-success">✅ Reporte enviado a {email}</div>}
-              {emailStatus === "err" && <div className="toast toast-error">❌ No se pudo enviar. Verifique la dirección.</div>}
+              {emailErrors.length > 0 && (
+                <div className="toast toast-error" style={{marginTop:"6px"}}>
+                  Correo(s) inválido(s): {emailErrors.join(", ")}
+                </div>
+              )}
+              {emailStatus === "ok"     && <div className="toast toast-success">✅ Reporte enviado a {email}</div>}
+              {emailStatus === "err"    && <div className="toast toast-error">❌ No se pudo enviar. Verifique la(s) dirección(es).</div>}
+              {emailStatus === "queued" && <div className="toast toast-info">📥 Sin conexión. El correo se enviará automáticamente cuando vuelva el internet.</div>}
             </div>
           )}
         </div>

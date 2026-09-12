@@ -4,6 +4,61 @@ import { explainAggRules } from "./ruleUtils";
 
 const LEVEL_COLORS = { 1: "#2e7d32", 2: "#d97706", 3: "#ea580c", 4: "#b91c1c" };
 
+const buildCaregiverResultsHTML = (results) =>
+  results.map((r) => `
+      <div style="border-left:5px solid ${LEVEL_COLORS[r.suspicionLevel]};padding:16px 20px;margin-bottom:16px;background:#fafafa;border-radius:6px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+          <strong style="font-size:16px;color:#0b2545;">${r.cancerName}</strong>
+          <span style="background:${LEVEL_COLORS[r.suspicionLevel]};color:#fff;padding:4px 14px;border-radius:20px;font-size:12px;font-weight:700;">
+            Nivel ${r.suspicionLevel} — ${LEVEL_LABELS[r.suspicionLevel]}
+          </span>
+        </div>
+        <div style="background:#f0f9ff;border-left:4px solid #1a8fe3;padding:14px 16px;border-radius:6px;">
+          <p style="margin:0;color:#374151;font-size:13px;line-height:1.8;">${LEVEL_SIMPLE[r.suspicionLevel]}</p>
+        </div>
+      </div>`).join("");
+
+const buildCaregiverReportHtml = (patientData, symptoms, results, evaluationDate) => {
+  const symptomsText = symptoms.map((c) => SYMPTOM_LABEL_MAP[c] || c).join(", ");
+  const proceInfo    = patientData.departamento
+    ? `${patientData.departamento}${patientData.municipio ? `, ${patientData.municipio}` : ""}` : "No especificada";
+  const sorted       = [...results].sort((a, b) => b.suspicionLevel - a.suspicionLevel);
+
+  return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+    <style>body{font-family:'Segoe UI',Arial,sans-serif;max-width:720px;margin:0 auto;padding:32px;color:#1a1a2e;}</style>
+    </head><body>
+    <div style="background:linear-gradient(135deg,#0b2545,#134074);padding:28px 32px;border-radius:12px;margin-bottom:28px;text-align:center;">
+      <h1 style="color:#fff;margin:0;font-size:28px;">📋 Reporte OncoDetect</h1>
+      <p style="color:rgba(255,255,255,0.65);margin:6px 0 0;font-size:13px;">Evaluación de tamizaje oncológico pediátrico</p>
+    </div>
+    <div style="background:#f0f4f8;padding:16px 20px;border-radius:10px;margin-bottom:24px;">
+      <p style="font-size:11px;font-weight:700;color:#134074;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;">Datos del Paciente</p>
+      <p style="margin:4px 0;font-size:14px;"><strong>Fecha:</strong> ${evaluationDate}</p>
+      <p style="margin:4px 0;font-size:14px;"><strong>Paciente:</strong> ${patientData.fullName}</p>
+      <p style="margin:4px 0;font-size:14px;"><strong>Edad:</strong> ${patientData.ageFormatted}</p>
+      <p style="margin:4px 0;font-size:14px;"><strong>Procedencia:</strong> ${proceInfo}</p>
+      <p style="margin:4px 0;font-size:14px;"><strong>Síntomas notificados:</strong> ${symptomsText}</p>
+    </div>
+    <p style="font-size:11px;font-weight:700;color:#134074;text-transform:uppercase;letter-spacing:1px;margin-bottom:14px;">Resultado de la Evaluación</p>
+    ${buildCaregiverResultsHTML(sorted)}
+    <div style="background:#e0f2fe;border:1px solid #7dd3fc;padding:18px 20px;border-radius:10px;margin-top:28px;text-align:center;">
+      <p style="margin:0;font-size:15px;color:#0b2545;font-weight:700;line-height:1.7;">
+        ⚕️ Este reporte es una guía orientativa.<br>
+        Muestre este reporte a un <strong>médico o centro de salud</strong> para una evaluación formal.
+      </p>
+    </div>
+    <div style="border:1px solid #fcd34d;background:#fffbeb;padding:16px 20px;border-radius:10px;margin-top:24px;">
+      <p style="margin:0;font-size:12px;color:#78350f;line-height:1.75;">
+        <strong>⚠️ AVISO LEGAL:</strong> OncoDetect es una herramienta educativo-informativa. <strong>No emite diagnósticos médicos.</strong>
+        Desarrollado bajo lineamientos OMS (2021) e IMDRF (2025).
+      </p>
+    </div>
+    <p style="text-align:center;color:#9ca3af;font-size:11px;margin-top:24px;">
+      Generado por OncoDetect · Modo Cuidador · UNITEC San Pedro Sula · ${new Date().getFullYear()}
+    </p>
+    </body></html>`;
+};
+
 const buildResultsHTML = (results, mode) =>
   results.map((r) => {
     const hasDisc    = r.uniqueDiscriminators > 0;
@@ -81,7 +136,11 @@ export const generatePDF = (patientData, selectedSymptoms, results, mode) => {
 };
 
 export const buildReportHtml = (patientData, symptoms, results, mode, evaluationDate) => {
-  const modeLabel    = mode === "medico" ? "Modo Médico" : "Modo Cuidador";
+  if (mode === "cuidador") {
+    return buildCaregiverReportHtml(patientData, symptoms, results, evaluationDate);
+  }
+
+  const modeLabel    = "Modo Médico";
   const symptomsText = symptoms.map((c) => `${c} — ${SYMPTOM_LABEL_MAP[c] || c}`).join("<br>");
   const proceInfo    = patientData.departamento
     ? `${patientData.departamento}${patientData.municipio ? `, ${patientData.municipio}` : ""}` : "No especificada";

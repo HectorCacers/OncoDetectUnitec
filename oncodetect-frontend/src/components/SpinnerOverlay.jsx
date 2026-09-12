@@ -4,7 +4,7 @@ const SPINNER_MSGS = {
   boot: [
     "Iniciando sistema...",
     "Conectando con el servidor...",
-    "El servidor puede tardar hasta 30 segundos...",
+    "Servidor iniciando, espera unos segundos...",
     "Cargando motor de reglas...",
     "Listo en un momento...",
   ],

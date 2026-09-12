@@ -1,6 +1,7 @@
 export default function ScreenHistorial({ state }) {
   const {
-    doctorUsername, adminMode, setAdminMode, adminModalOpen, setAdminModalOpen,
+    doctorUsername, doctorToken, getEvaluationFHIR, getEvaluationsFHIRBulk,
+    adminMode, setAdminMode, adminModalOpen, setAdminModalOpen,
     adminPass, setAdminPass, adminError, adminLoading, handleVerifyAdmin,
     setHistorialScreen, selectedToDelete, setSelectedToDelete,
     toggleSelectEval, handleDeleteSelected,
@@ -14,6 +15,43 @@ export default function ScreenHistorial({ state }) {
 
   const lvlClass = (n) => `h-level-badge h-level-${n}`;
   const lvlLabel = { 1:"Sospecha Baja", 2:"Sospecha Moderada", 3:"Sospecha Alta", 4:"Sospecha Muy Alta" };
+
+  const handleExportFhir = async (ev) => {
+    try {
+      const res = await getEvaluationFHIR(ev._id, doctorToken);
+      const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: "application/fhir+json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `evaluacion_${ev._id}_fhir.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("Error al exportar la evaluación en formato FHIR.");
+    }
+  };
+
+  const handleExportAllFhir = async () => {
+    const filtering = historialResults && historialQuery.trim().length > 0;
+    if (!filtering && !window.confirm("¿Exportar TODAS las evaluaciones del médico en formato FHIR?")) return;
+    try {
+      const res = await getEvaluationsFHIRBulk(doctorToken, filtering ? historialQuery : "");
+      const date = new Date().toISOString().slice(0, 10);
+      const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: "application/fhir+json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `evaluaciones_fhir_bulk_${date}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("Error al exportar las evaluaciones en formato FHIR.");
+    }
+  };
 
   return (
     <div style={{minHeight:"100vh",background:"var(--bg)"}}>
@@ -102,7 +140,14 @@ export default function ScreenHistorial({ state }) {
         {/* Resultados */}
         {historialResults && (
           <div className="card">
-            <div className="card-title"><div className="card-title-icon">👤</div>{historialResults.length} resultado(s)</div>
+            <div className="card-title">
+              <div className="card-title-icon">👤</div>{historialResults.length} resultado(s)
+              <button
+                onClick={handleExportAllFhir}
+                style={{marginLeft:"auto",padding:"7px 14px",borderRadius:"8px",border:"1.5px solid var(--teal)",background:"rgba(13,148,136,0.1)",color:"var(--navy)",fontFamily:"'DM Sans',sans-serif",fontSize:"12px",fontWeight:700,cursor:"pointer"}}>
+                ⬇️ Exportar todos los FHIR
+              </button>
+            </div>
             {historialResults.map((ev) => (
               <div key={ev._id} className="historial-eval-card"
                 style={{border: adminMode && selectedToDelete.includes(ev._id) ? "2px solid #DC2626" : "1px solid #e2e8f0", background: adminMode && selectedToDelete.includes(ev._id) ? "#FEF2F2" : "#fff"}}>
@@ -122,6 +167,11 @@ export default function ScreenHistorial({ state }) {
                   <div style={{textAlign:"right",fontSize:"12px",color:"var(--muted)"}}>
                     <div>{ev.patientAge ? `${Math.floor(ev.patientAge)} año(s)` : ""}</div>
                     <div>{ev.patientDepto}{ev.patientMunicipio ? `, ${ev.patientMunicipio}` : ""}</div>
+                    <button
+                      onClick={() => handleExportFhir(ev)}
+                      style={{marginTop:"8px",padding:"6px 12px",borderRadius:"8px",border:"1.5px solid var(--teal)",background:"rgba(13,148,136,0.1)",color:"var(--navy)",fontFamily:"'DM Sans',sans-serif",fontSize:"12px",fontWeight:700,cursor:"pointer"}}>
+                      ⬇️ Exportar FHIR
+                    </button>
                   </div>
                 </div>
                 {(ev.results || []).map((r) => (
@@ -143,7 +193,14 @@ export default function ScreenHistorial({ state }) {
         {/* Recientes */}
         {recentEvals.length > 0 && !historialResults && (
           <div className="card">
-            <div className="card-title"><div className="card-title-icon">🕐</div>Evaluaciones recientes</div>
+            <div className="card-title">
+              <div className="card-title-icon">🕐</div>Evaluaciones recientes
+              <button
+                onClick={handleExportAllFhir}
+                style={{marginLeft:"auto",padding:"7px 14px",borderRadius:"8px",border:"1.5px solid var(--teal)",background:"rgba(13,148,136,0.1)",color:"var(--navy)",fontFamily:"'DM Sans',sans-serif",fontSize:"12px",fontWeight:700,cursor:"pointer"}}>
+                ⬇️ Exportar todos los FHIR
+              </button>
+            </div>
             {recentEvals.map((ev) => (
               <div key={ev._id} className="historial-eval-card" style={{cursor:"pointer"}}
                 onClick={() => { setHistorialQuery(ev.patientName); handleHistorialSearch(); }}>

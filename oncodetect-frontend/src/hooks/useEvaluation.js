@@ -3,11 +3,22 @@ import {
   checkHealth, login, verifyAdmin as apiVerifyAdmin,
   evaluate as apiEvaluate, sendReport as apiSendReport,
   saveEvaluation as apiSave, searchEvaluations, getRecentEvals,
-  bulkDelete
+  bulkDelete, getEvaluationFHIR, getEvaluationsFHIRBulk
 } from "../services/api";
 import { calcAge, formatAge, getNow, getDateLimits } from "../utils/dateUtils";
 import { buildReportHtml } from "../utils/pdfUtils";
 import { SYMPTOMS_CAREGIVER } from "../data/clinicalData";
+import {
+  enqueueItem, getPendingItems, removeItem, setItemStatus,
+} from "../utils/offlineQueue";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const withTimeout = (promise, ms) =>
+  Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("request-timeout")), ms)),
+  ]);
 
 export default function useEvaluation() {
   // ── Navigation ──────────────────────────────────────────────────────────────
@@ -34,25 +45,115 @@ export default function useEvaluation() {
     setTimeout(() => { clearInterval(check); run(); }, 60000);
   }, []);
 
-  // ── Boot ping ────────────────────────────────────────────────────────────────
+  // ── Conexión ─────────────────────────────────────────────────────────────────
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator !== "undefined" ? navigator.onLine : true
+  );
+  const [offlineMessage, setOfflineMessage] = useState("");
+  const [pendingCount, setPendingCount]     = useState(0);
+
+  const dismissOfflineMessage = useCallback(() => setOfflineMessage(""), []);
+
+  const refreshPendingCount = useCallback(async () => {
+    try {
+      const items = await getPendingItems();
+      setPendingCount(items.length);
+    } catch { setPendingCount(0); }
+  }, []);
+
+  // ── Boot ping (no bloqueante) ────────────────────────────────────────────────
   useEffect(() => {
     setSpinnerMode("boot"); setSpinnerVisible(true);
     let cancelled = false;
     const startTime = Date.now();
+    const BOOT_MAX_MS = 12000;
+
+    const finish = () => {
+      if (cancelled) return;
+      bootDoneRef.current = true;
+      setSpinnerVisible(false);
+    };
+
     const ping = async () => {
       try {
         await checkHealth();
         if (!cancelled) {
+          setOfflineMessage("");
           const remaining = Math.max(0, 2000 - (Date.now() - startTime));
-          setTimeout(() => { if (!cancelled) { bootDoneRef.current = true; setSpinnerVisible(false); } }, remaining);
+          setTimeout(finish, remaining);
         }
       } catch {
-        if (!cancelled && Date.now() - startTime < 60000) setTimeout(ping, 3000);
-        else if (!cancelled) { bootDoneRef.current = true; setSpinnerVisible(false); }
+        if (!cancelled && Date.now() - startTime < BOOT_MAX_MS) {
+          setOfflineMessage("Conectando con el servidor...");
+          setTimeout(ping, 3000);
+        } else if (!cancelled) {
+          setOfflineMessage("No se pudo conectar con el servidor. Puedes continuar: las evaluaciones y correos se guardarán en cola.");
+          finish();
+        }
       }
     };
-    ping();
+
+    // Sin conexión detectada: no intentar el ping, desbloquear de inmediato
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      finish();
+    } else {
+      ping();
+    }
+
     return () => { cancelled = true; };
+  }, []);
+
+  // ── Escuchar cambios de conexión en tiempo real ──────────────────────────────
+  useEffect(() => {
+    const handleOnline  = () => { setIsOnline(true); syncPendingQueue(); };
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener("online",  handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online",  handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Cola offline ─────────────────────────────────────────────────────────────
+  const syncingRef = useRef(false);
+
+  const syncPendingQueue = useCallback(async () => {
+    if (syncingRef.current) return;
+    if (typeof navigator !== "undefined" && !navigator.onLine) return;
+    syncingRef.current = true;
+    try {
+      const items = await getPendingItems();
+      for (const item of items) {
+        try {
+          if (item.type === "evaluate") {
+            const { symptoms, patient_age: patientAge, meta } = item.payload;
+            const res = await withTimeout(apiEvaluate(symptoms, patientAge), 20000);
+            if (meta?.save && meta.token) {
+              await withTimeout(apiSave({ ...meta.save, results: res.data.results }, meta.token), 20000);
+            }
+          } else if (item.type === "email") {
+            await withTimeout(apiSendReport(item.payload), 30000);
+          }
+          await removeItem(item.id);
+        } catch {
+          await setItemStatus(item.id, "error");
+        }
+      }
+    } finally {
+      syncingRef.current = false;
+      refreshPendingCount();
+    }
+  }, [refreshPendingCount]);
+
+  // Cargar pendientes guardados de sesiones anteriores y sincronizar si hay red
+  useEffect(() => {
+    refreshPendingCount();
+    if (typeof navigator !== "undefined" && navigator.onLine) {
+      syncPendingQueue();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Auth médico ──────────────────────────────────────────────────────────────
@@ -221,29 +322,47 @@ export default function useEvaluation() {
   const handleEvaluate = useCallback(async () => {
     const symptoms = userMode === "medico" ? selectedSymptoms : uniqueCareCodes;
     if (!ageCalc || !symptoms.length) return;
+    const ageInYears = parseFloat((ageCalc.totalMonths / 12).toFixed(2));
     setLoading(true); setSpinnerMode("eval"); setSpinnerVisible(true);
+
+    const saveMeta = (userMode === "medico" && patientIdentidad.trim() && doctorToken)
+      ? {
+          patientId: patientIdentidad.trim(),
+          patientName: patientFullName,
+          patientDob,
+          patientAge: ageInYears,
+          patientDepto, patientMunicipio,
+          userMode, symptoms,
+        }
+      : null;
+
     try {
-      const res = await apiEvaluate(symptoms, parseFloat((ageCalc.totalMonths / 12).toFixed(2)));
+      const res = await withTimeout(apiEvaluate(symptoms, ageInYears), 20000);
       setResults(res.data.results);
       setSpinnerVisible(false); setScreen("results");
-      if (userMode === "medico" && patientIdentidad.trim() && doctorToken) {
+      if (saveMeta) {
         try {
-          await apiSave({
-            patientId: patientIdentidad.trim(),
-            patientName: patientFullName,
-            patientDob,
-            patientAge: parseFloat((ageCalc.totalMonths / 12).toFixed(2)),
-            patientDepto, patientMunicipio,
-            userMode, symptoms,
-            results: res.data.results,
-          }, doctorToken);
+          await withTimeout(apiSave({ ...saveMeta, results: res.data.results }, doctorToken), 20000);
         } catch { /* silencioso */ }
       }
+      return;
     } catch {
+      // Sin conexión o el servidor no respondió: guardar en la cola para no perder el trabajo
       setSpinnerVisible(false);
-      alert("Error al conectar con el servidor. Verifica tu conexión.");
+      try {
+        await enqueueItem("evaluate", {
+          symptoms,
+          patient_age: ageInYears,
+          meta: saveMeta ? { save: saveMeta, token: doctorToken } : null,
+        });
+        await refreshPendingCount();
+        setOfflineMessage("Sin conexión. La evaluación se procesará automáticamente cuando vuelva el internet.");
+      } catch {
+        alert("Error al conectar con el servidor. Verifica tu conexión.");
+      }
     } finally { setLoading(false); }
-  }, [ageCalc, selectedSymptoms, uniqueCareCodes, userMode, patientIdentidad, doctorToken]);
+  }, [ageCalc, selectedSymptoms, uniqueCareCodes, userMode, patientIdentidad, doctorToken,
+      patientFullName, patientDob, patientDepto, patientMunicipio, refreshPendingCount]);
 
   // ── Email ────────────────────────────────────────────────────────────────────
   const [email, setEmail]                 = useState("");
@@ -252,14 +371,38 @@ export default function useEvaluation() {
 
   const handleSendEmail = async () => {
     if (!email || !results) return;
+    const emails = email.split(",").map((e) => e.trim()).filter(Boolean);
+    if (emails.some((e) => !EMAIL_RE.test(e))) {
+      setEmailStatus("err");
+      return;
+    }
     setEmailStatus("sending");
     const symptoms       = userMode === "medico" ? selectedSymptoms : uniqueCareCodes;
     const evaluationDate = getNow();
     const reportHtml     = buildReportHtml(patientData, symptoms, results, userMode, evaluationDate);
+    const payload = {
+      recipientEmail: email,
+      patientName: patientFullName,
+      patientAge: ageFormatted,
+      symptoms,
+      results,
+      evaluationDate,
+      reportHtml,
+    };
     try {
-      await apiSendReport({ recipientEmail: email, patientName: patientFullName, patientAge: ageFormatted, symptoms, results, evaluationDate, reportHtml });
+      await withTimeout(apiSendReport(payload), 30000);
       setEmailStatus("ok");
-    } catch { setEmailStatus("err"); }
+    } catch {
+      // Sin conexión o falló a mitad del envío: encolar para reenviar automáticamente
+      try {
+        await enqueueItem("email", payload);
+        await refreshPendingCount();
+        setEmailStatus("queued");
+        setOfflineMessage("Sin conexión. El correo se enviará automáticamente cuando vuelva el internet.");
+      } catch {
+        setEmailStatus("err");
+      }
+    }
   };
 
   // ── Reset ────────────────────────────────────────────────────────────────────
@@ -277,6 +420,8 @@ export default function useEvaluation() {
     historialScreen, setHistorialScreen,
     // spinner
     spinnerVisible, spinnerMode, withSpinner,
+    // conexión / offline
+    isOnline, offlineMessage, dismissOfflineMessage, pendingCount, syncPendingQueue,
     // auth
     doctorToken, doctorUsername, loginUser, setLoginUser, loginPass, setLoginPass,
     loginError, loginLoading, handleLogin, handleLogout,
@@ -303,8 +448,10 @@ export default function useEvaluation() {
     // evaluate
     loading, results, handleEvaluate,
     // email
-    email, setEmail, emailStatus, showEmailInput, setShowEmailInput, handleSendEmail,
+    email, setEmail, emailStatus, setEmailStatus, showEmailInput, setShowEmailInput, handleSendEmail,
     // reset
     handleReset,
+    // fhir export
+    getEvaluationFHIR, getEvaluationsFHIRBulk,
   };
 }
