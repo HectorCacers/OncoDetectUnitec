@@ -14,6 +14,7 @@ import {
 } from "../utils/offlineQueue";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_SEND_TIMEOUT_MS = 60000;
 
 const withTimeout = (promise, ms) =>
   Promise.race([
@@ -148,7 +149,7 @@ export default function useEvaluation() {
               await completeItem(item.id, res.data.results);
             }
           } else if (item.type === "email") {
-            await withTimeout(apiSendReport(item.payload), 30000);
+            await withTimeout(apiSendReport(item.payload), EMAIL_SEND_TIMEOUT_MS);
             await removeItem(item.id);
           } else {
             await removeItem(item.id);
@@ -401,6 +402,7 @@ export default function useEvaluation() {
   // ── Email ────────────────────────────────────────────────────────────────────
   const [email, setEmail]                 = useState("");
   const [emailStatus, setEmailStatus]     = useState(null);
+  const [emailError, setEmailError]       = useState("");
   const [showEmailInput, setShowEmailInput] = useState(false);
 
   const handleSendEmail = async () => {
@@ -410,10 +412,11 @@ export default function useEvaluation() {
       setEmailStatus("err");
       return;
     }
-    setEmailStatus("sending");
+    setEmailStatus("sending"); setEmailError("");
     const symptoms       = userMode === "medico" ? selectedSymptoms : uniqueCareCodes;
     const evaluationDate = getNow();
     const reportHtml     = buildReportHtml(patientData, symptoms, results, userMode, evaluationDate);
+    const requestId      = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const payload = {
       recipientEmail: email,
       patientName: patientFullName,
@@ -422,18 +425,33 @@ export default function useEvaluation() {
       results,
       evaluationDate,
       reportHtml,
+      requestId,
     };
     try {
-      await withTimeout(apiSendReport(payload), 30000);
+      await withTimeout(apiSendReport(payload), EMAIL_SEND_TIMEOUT_MS);
       setEmailStatus("ok");
-    } catch {
-      // Sin conexión o falló a mitad del envío: encolar para reenviar automáticamente
-      try {
-        await enqueueItem("email", payload);
-        await refreshPendingCount();
-        setEmailStatus("queued");
-        setOfflineMessage("Sin conexión. El correo se enviará automáticamente cuando vuelva el internet.");
-      } catch {
+    } catch (err) {
+      const isOfflineOrSlow =
+        err?.message === "request-timeout" ||
+        !err?.response ||
+        (typeof navigator !== "undefined" && navigator.onLine === false);
+      if (isOfflineOrSlow) {
+        // Sin conexión o el servidor tardó demasiado: encolar para reenviar automáticamente
+        try {
+          await enqueueItem("email", payload);
+          await refreshPendingCount();
+          setEmailStatus("queued");
+          setOfflineMessage("Sin conexión. El correo se enviará automáticamente cuando vuelva el internet.");
+        } catch {
+          setEmailStatus("err");
+        }
+      } else {
+        // El servidor respondió con error real: no encolar, mostrar el error real
+        setEmailError(
+          err.response?.data?.error ||
+          err.response?.data?.detail ||
+          "Error al enviar el correo."
+        );
         setEmailStatus("err");
       }
     }
@@ -503,7 +521,7 @@ export default function useEvaluation() {
     setPatientFirstName(""); setPatientLastName(""); setPatientDob(""); setDobTextInput("");
     setPatientIdentidad(""); setPatientDepto(""); setPatientMunicipio("");
     setSelectedCancers([]); setSelectedSymptoms([]); setSelectedCareSymptoms([]);
-    setResults(null); setEmail(""); setEmailStatus(null); setShowEmailInput(false);
+    setResults(null); setEmail(""); setEmailStatus(null); setEmailError(""); setShowEmailInput(false);
   };
 
   return {
@@ -542,7 +560,8 @@ export default function useEvaluation() {
     // evaluate
     loading, results, handleEvaluate,
     // email
-    email, setEmail, emailStatus, setEmailStatus, showEmailInput, setShowEmailInput, handleSendEmail,
+    email, setEmail, emailStatus, setEmailStatus, emailError, setEmailError,
+    showEmailInput, setShowEmailInput, handleSendEmail,
     // reset
     handleReset,
     // fhir export
