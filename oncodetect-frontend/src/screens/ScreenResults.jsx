@@ -18,7 +18,8 @@ export default function ScreenResults({ state }) {
     ageFormatted, dobFormatted, patientDepto, patientMunicipio,
     selectedSymptoms, uniqueCareCodes,
     email, setEmail, emailStatus, setEmailStatus, showEmailInput, setShowEmailInput,
-    handleSendEmail, handleReset
+    handleSendEmail, handleReset,
+    isViewingCompleted, markCompletedResultViewed
   } = state;
 
   const [emailErrors, setEmailErrors] = useState([]);
@@ -39,6 +40,12 @@ export default function ScreenResults({ state }) {
         <div className={`header-profile ${userMode}`}>{userMode === "medico" ? "🩺 Modo Médico" : "👨‍👩‍👧 Modo Cuidador"}</div>
       </header>
       <div className="main-container results-section">
+        {isViewingCompleted && (
+          <div className="info-banner view-completed-banner">
+            <div className="view-completed-text">📊 <strong>Resultado guardado sin conexión.</strong> Fue calculado automáticamente al sincronizar. Márcalo como visto para quitarlo de la cola.</div>
+            <button type="button" className="mark-viewed-btn" onClick={markCompletedResultViewed}>✓ Marcar como visto y salir</button>
+          </div>
+        )}
         <div className="info-banner">
           ⚠️ <strong>Aviso:</strong> Los resultados son orientativos y deben ser interpretados por personal de salud calificado.
         </div>

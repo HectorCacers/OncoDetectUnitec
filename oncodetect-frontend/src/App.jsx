@@ -82,8 +82,10 @@ export default function App() {
       <OfflineBanner
         isOnline={isOnline}
         pendingCount={pendingCount}
+        completedCount={state.completedCount}
         offlineMessage={offlineMessage}
         onDismiss={dismissOfflineMessage}
+        onViewCompleted={state.viewMostRecentCompleted}
       />
       {content}
     </>

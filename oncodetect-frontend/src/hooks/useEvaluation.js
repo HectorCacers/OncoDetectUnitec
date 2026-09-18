@@ -10,6 +10,7 @@ import { buildReportHtml } from "../utils/pdfUtils";
 import { SYMPTOMS_CAREGIVER } from "../data/clinicalData";
 import {
   enqueueItem, getPendingItems, removeItem, setItemStatus,
+  completeItem, getCompletedItems,
 } from "../utils/offlineQueue";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -51,6 +52,7 @@ export default function useEvaluation() {
   );
   const [offlineMessage, setOfflineMessage] = useState("");
   const [pendingCount, setPendingCount]     = useState(0);
+  const [completedCount, setCompletedCount] = useState(0);
 
   const dismissOfflineMessage = useCallback(() => setOfflineMessage(""), []);
 
@@ -59,6 +61,13 @@ export default function useEvaluation() {
       const items = await getPendingItems();
       setPendingCount(items.length);
     } catch { setPendingCount(0); }
+  }, []);
+
+  const refreshCompletedCount = useCallback(async () => {
+    try {
+      const items = await getCompletedItems();
+      setCompletedCount(items.length);
+    } catch { setCompletedCount(0); }
   }, []);
 
   // ── Boot ping (no bloqueante) ────────────────────────────────────────────────
@@ -133,10 +142,17 @@ export default function useEvaluation() {
             if (meta?.save && meta.token) {
               await withTimeout(apiSave({ ...meta.save, results: res.data.results }, meta.token), 20000);
             }
+            if (meta?.save) {
+              await removeItem(item.id);
+            } else {
+              await completeItem(item.id, res.data.results);
+            }
           } else if (item.type === "email") {
             await withTimeout(apiSendReport(item.payload), 30000);
+            await removeItem(item.id);
+          } else {
+            await removeItem(item.id);
           }
-          await removeItem(item.id);
         } catch {
           await setItemStatus(item.id, "error");
         }
@@ -144,12 +160,14 @@ export default function useEvaluation() {
     } finally {
       syncingRef.current = false;
       refreshPendingCount();
+      refreshCompletedCount();
     }
-  }, [refreshPendingCount]);
+  }, [refreshPendingCount, refreshCompletedCount]);
 
   // Cargar pendientes guardados de sesiones anteriores y sincronizar si hay red
   useEffect(() => {
     refreshPendingCount();
+    refreshCompletedCount();
     if (typeof navigator !== "undefined" && navigator.onLine) {
       syncPendingQueue();
     }
@@ -173,7 +191,12 @@ export default function useEvaluation() {
       setLoginUser(""); setLoginPass("");
       setUserMode("medico"); setScreen("form");
     } catch (err) {
-      setLoginError(err.response?.data?.error || "Error al iniciar sesión.");
+      const isOffline =
+        (typeof navigator !== "undefined" && navigator.onLine === false) ||
+        !err.response;
+      setLoginError(isOffline
+        ? "No hay conexión a internet. Debes conectarte para iniciar sesión."
+        : (err.response?.data?.error || "Error al iniciar sesión."));
     } finally { setLoginLoading(false); }
   };
 
@@ -353,6 +376,16 @@ export default function useEvaluation() {
         await enqueueItem("evaluate", {
           symptoms,
           patient_age: ageInYears,
+          patient: {
+            firstName: patientFirstName.trim(),
+            lastName: patientLastName.trim(),
+            identidad: patientIdentidad.trim(),
+            dob: patientDob,
+            depto: patientDepto,
+            municipio: patientMunicipio.trim(),
+          },
+          selectedCareSymptoms: userMode === "cuidador" ? selectedCareSymptoms : undefined,
+          userMode,
           meta: saveMeta ? { save: saveMeta, token: doctorToken } : null,
         });
         await refreshPendingCount();
@@ -361,8 +394,9 @@ export default function useEvaluation() {
         alert("Error al conectar con el servidor. Verifica tu conexión.");
       }
     } finally { setLoading(false); }
-  }, [ageCalc, selectedSymptoms, uniqueCareCodes, userMode, patientIdentidad, doctorToken,
-      patientFullName, patientDob, patientDepto, patientMunicipio, refreshPendingCount]);
+  }, [ageCalc, selectedSymptoms, selectedCareSymptoms, uniqueCareCodes, userMode,
+      patientIdentidad, patientFirstName, patientLastName, patientDob, patientDepto,
+      patientMunicipio, doctorToken, patientFullName, refreshPendingCount]);
 
   // ── Email ────────────────────────────────────────────────────────────────────
   const [email, setEmail]                 = useState("");
@@ -405,6 +439,64 @@ export default function useEvaluation() {
     }
   };
 
+  // ── Resultados sincronizados de cuidador ─────────────────────────────────────
+  const [isViewingCompleted, setIsViewingCompleted] = useState(false);
+  const completedViewIdRef                          = useRef(null);
+
+  const viewCompletedResult = useCallback(async (itemId) => {
+    try {
+      const items = await getCompletedItems();
+      const item = items.find((it) => it.id === itemId);
+      if (!item) return;
+      const p = item.payload?.patient || {};
+      if (p.firstName !== undefined) setPatientFirstName(p.firstName);
+      if (p.lastName !== undefined)  setPatientLastName(p.lastName);
+      if (p.identidad !== undefined) setPatientIdentidad(p.identidad);
+      if (p.dob !== undefined)       setPatientDob(p.dob);
+      if (p.depto !== undefined)     setPatientDepto(p.depto);
+      if (p.municipio !== undefined) setPatientMunicipio(p.municipio);
+      setSelectedSymptoms([]);
+      setSelectedCareSymptoms(Array.isArray(item.payload?.selectedCareSymptoms)
+        ? item.payload.selectedCareSymptoms
+        : []);
+      setResults(item.result);
+      setUserMode(item.payload?.userMode || "cuidador");
+      completedViewIdRef.current = item.id;
+      setIsViewingCompleted(true);
+      setScreen("results");
+    } catch { /* silencioso */ }
+  }, []);
+
+  const viewMostRecentCompleted = useCallback(async () => {
+    try {
+      const items = await getCompletedItems();
+      if (!items.length) return;
+      await viewCompletedResult(items[items.length - 1].id);
+    } catch { /* silencioso */ }
+  }, [viewCompletedResult]);
+
+  const markCompletedResultViewed = useCallback(async () => {
+    const id = completedViewIdRef.current;
+    completedViewIdRef.current = null;
+    setIsViewingCompleted(false);
+    if (id) {
+      try { await removeItem(id); } catch { /* silencioso */ }
+    }
+    await refreshCompletedCount();
+    setScreen("form");
+  }, [refreshCompletedCount]);
+
+  // Al salir de la pantalla de resultados (si se está viendo un resultado guardado), eliminarlo
+  useEffect(() => {
+    if (screen !== "results" && completedViewIdRef.current) {
+      const id = completedViewIdRef.current;
+      completedViewIdRef.current = null;
+      setIsViewingCompleted(false);
+      removeItem(id).finally(() => refreshCompletedCount());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, refreshCompletedCount]);
+
   // ── Reset ────────────────────────────────────────────────────────────────────
   const handleReset = () => {
     setScreen("form");
@@ -421,7 +513,9 @@ export default function useEvaluation() {
     // spinner
     spinnerVisible, spinnerMode, withSpinner,
     // conexión / offline
-    isOnline, offlineMessage, dismissOfflineMessage, pendingCount, syncPendingQueue,
+    isOnline, offlineMessage, dismissOfflineMessage, pendingCount, completedCount,
+    syncPendingQueue, viewCompletedResult, viewMostRecentCompleted,
+    isViewingCompleted, markCompletedResultViewed,
     // auth
     doctorToken, doctorUsername, loginUser, setLoginUser, loginPass, setLoginPass,
     loginError, loginLoading, handleLogin, handleLogout,
