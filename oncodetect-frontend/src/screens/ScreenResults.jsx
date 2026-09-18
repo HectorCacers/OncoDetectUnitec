@@ -17,7 +17,8 @@ export default function ScreenResults({ state }) {
     results, userMode, patientData, patientFullName, patientIdentidad,
     ageFormatted, dobFormatted, patientDepto, patientMunicipio,
     selectedSymptoms, uniqueCareCodes,
-    email, setEmail, emailStatus, setEmailStatus, showEmailInput, setShowEmailInput,
+    email, setEmail, emailStatus, setEmailStatus, emailError, setEmailError,
+    showEmailInput, setShowEmailInput,
     handleSendEmail, handleReset,
     isViewingCompleted, markCompletedResultViewed
   } = state;
@@ -85,7 +86,7 @@ export default function ScreenResults({ state }) {
             <button className="action-btn btn-pdf" onClick={() => generatePDF(patientData, symptomsForPDF, sorted, userMode)}>
               🖨️ Generar PDF / Imprimir
             </button>
-            <button className="action-btn btn-email" onClick={() => { setShowEmailInput(!showEmailInput); setEmail(""); setEmailStatus(null); setEmailErrors([]); }}>
+            <button className="action-btn btn-email" onClick={() => { setShowEmailInput(!showEmailInput); setEmail(""); setEmailStatus(null); setEmailError(""); setEmailErrors([]); }}>
               ✉️ Enviar por Correo
             </button>
             <button className="action-btn btn-reset" onClick={handleReset}>🔄 Nueva Evaluación</button>
@@ -112,7 +113,7 @@ export default function ScreenResults({ state }) {
                 </div>
               )}
               {emailStatus === "ok"     && <div className="toast toast-success">✅ Reporte enviado a {email}</div>}
-              {emailStatus === "err"    && <div className="toast toast-error">❌ No se pudo enviar. Verifique la(s) dirección(es).</div>}
+              {emailStatus === "err"    && <div className="toast toast-error">❌ {emailError || "No se pudo enviar. Verifique la(s) dirección(es)."}</div>}
               {emailStatus === "queued" && <div className="toast toast-info">📥 Sin conexión. El correo se enviará automáticamente cuando vuelva el internet.</div>}
             </div>
           )}

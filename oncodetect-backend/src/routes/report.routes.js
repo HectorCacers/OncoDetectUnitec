@@ -11,6 +11,19 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// Registro en memoria de envíos ya procesados (clave: requestId del cliente).
+// Evita correos duplicados cuando el frontend reintenta un envío de la cola
+// offline tras haber agotado su timeout (p. ej. cold start de Render).
+const processedRequests = new Map();
+const PROCESSED_REQUEST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function pruneProcessedRequests() {
+  const cutoff = Date.now() - PROCESSED_REQUEST_TTL_MS;
+  for (const [id, ts] of processedRequests) {
+    if (ts < cutoff) processedRequests.delete(id);
+  }
+}
+
 
 // ─── POST /send-report ────────────────────────────────────────────────────────
 /**
@@ -56,11 +69,20 @@ const transporter = nodemailer.createTransport({
  *         description: Error al enviar el correo
  */
 router.post('/', async (req, res) => {
-  const { recipientEmail, patientName, patientAge, userMode, evaluationDate, reportHtml } = req.body;
+  const { recipientEmail, patientName, patientAge, userMode, evaluationDate, reportHtml, requestId } = req.body;
   if (!recipientEmail) return res.status(400).json({ error: 'recipientEmail es requerido.' });
   if (!reportHtml)     return res.status(400).json({ error: 'reportHtml es requerido.' });
   const recipientCount = recipientEmail.split(',').length;
+
+  pruneProcessedRequests();
+  const isDuplicate = requestId && processedRequests.has(requestId);
+  if (!isDuplicate && requestId) processedRequests.set(requestId, Date.now());
+
   try {
+    if (isDuplicate) {
+      // El cliente reintenta un envío que ya se procesó (timeout de cold start): no duplicar.
+      return res.json({ ok: true, duplicated: true, message: `Reporte ya enviado a ${recipientCount} destinatario(s).` });
+    }
     await transporter.sendMail({
       from:    `OncoDetect <${process.env.GMAIL_USER}>`,
       to:      recipientEmail,
@@ -70,6 +92,7 @@ router.post('/', async (req, res) => {
     console.log(`[/send-report] Correo enviado a ${recipientCount} destinatario(s): ${recipientEmail}`);
     res.json({ ok: true, message: `Reporte enviado a ${recipientCount} destinatario(s)` });
   } catch (err) {
+    if (requestId) processedRequests.delete(requestId);
     console.error('[/send-report] Error:', err.message);
     res.status(500).json({ error: 'Error al enviar el correo.', detail: err.message });
   }
