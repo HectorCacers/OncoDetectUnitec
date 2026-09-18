@@ -26,7 +26,7 @@ function itemTime(iso) {
   }
 }
 
-export default function OfflineBanner({ isOnline, pendingCount, offlineMessage, onDismiss }) {
+export default function OfflineBanner({ isOnline, pendingCount, completedCount, offlineMessage, onDismiss, onViewCompleted }) {
   const [expanded, setExpanded] = useState(false);
   const [items, setItems] = useState([]);
 
@@ -43,20 +43,21 @@ export default function OfflineBanner({ isOnline, pendingCount, offlineMessage, 
     }
   };
 
-  if (isOnline && pendingCount === 0 && !offlineMessage) return null;
+  if (isOnline && pendingCount === 0 && completedCount === 0 && !offlineMessage) return null;
 
-  const hasPending = pendingCount > 0;
+  const hasPending   = pendingCount > 0;
+  const hasCompleted = completedCount > 0;
 
   return (
-    <div className={`offline-banner ${!isOnline ? "offline" : hasPending ? "syncing" : ""}`}>
+    <div className={`offline-banner ${!isOnline ? "offline" : hasPending ? "syncing" : hasCompleted ? "ready" : ""}`}>
       <div className="offline-banner-inner">
         {!isOnline ? (
           <span>📡 Sin conexión. Los datos se guardarán y se sincronizarán automáticamente.</span>
         ) : hasPending ? (
           <span>🔄 {pendingCount === 1 ? "1 acción pendiente de sincronizar" : `${pendingCount} acciones pendientes de sincronizar`}. Se enviará cuando haya conexión.</span>
-        ) : (
+        ) : offlineMessage ? (
           <span>{offlineMessage}</span>
-        )}
+        ) : null}
         {hasPending && (
           <button type="button" className="offline-banner-detail" onClick={toggleDetail}>
             {expanded ? "Ocultar ▴" : "Ver detalle ▾"}
@@ -66,6 +67,20 @@ export default function OfflineBanner({ isOnline, pendingCount, offlineMessage, 
           <button type="button" className="offline-banner-dismiss" onClick={onDismiss} aria-label="Cerrar">✕</button>
         )}
       </div>
+      {hasCompleted && (
+        <div className="offline-banner-completed">
+          <span className="offline-banner-completed-icon">📊</span>
+          <span className="offline-banner-completed-text">
+            {completedCount === 1
+              ? "1 resultado listo para ver"
+              : `${completedCount} resultados listos para ver`}
+            . Evaluación de cuidador procesada al sincronizar.
+          </span>
+          <button type="button" className="offline-banner-completed-view" onClick={onViewCompleted}>
+            Ver resultado
+          </button>
+        </div>
+      )}
       {hasPending && expanded && (
         <div className="offline-banner-items">
           {items.length === 0 ? (

@@ -51,6 +51,25 @@ export async function setItemStatus(id, status) {
   }
 }
 
+export async function completeItem(id, result) {
+  const db = await getDB();
+  const item = await db.get(STORE, id);
+  if (item) {
+    item.status = "completed";
+    item.result = result;
+    item.completedAt = new Date().toISOString();
+    await db.put(STORE, item);
+  }
+}
+
+export async function getCompletedItems() {
+  const db = await getDB();
+  const all = await db.getAll(STORE);
+  return all
+    .filter((it) => it.status === "completed")
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+}
+
 export async function removeItem(id) {
   const db = await getDB();
   await db.delete(STORE, id);
