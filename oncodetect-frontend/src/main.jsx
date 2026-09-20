@@ -9,16 +9,11 @@ import { registerSW } from "virtual:pwa-register";
 // clientsClaim), sin que el usuario deba reinstalar la app.
 const updateSW = registerSW({
   immediate: true,
-  onOfflineReady() {
-    console.log("OncoDetect listo para usarse sin conexión.");
-  },
-  onRegisteredSW(swUrl, registration) {
+  onRegisteredSW(_swUrl, registration) {
     if (registration) {
       setInterval(() => {
         registration.update().catch(() => {});
       }, 60 * 60 * 1000);
-    } else {
-      console.log("Service worker registrado:", swUrl);
     }
   },
 });

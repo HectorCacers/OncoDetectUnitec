@@ -74,7 +74,6 @@ router.post('/save', authRequired, async (req, res) => {
       patientDob, patientAge, patientDepto, patientMunicipio, userMode, symptoms, results,
     });
     await evaluation.save();
-    console.log(`[/evaluations/save] Guardado — paciente: ${patientId}`);
     res.json({ ok: true, id: evaluation._id });
   } catch (err) {
     console.error('[/evaluations/save] Error:', err.message);
@@ -334,7 +333,6 @@ router.get('/fhir/bulk', authRequired, async (req, res) => {
       return res.status(404).json({ error: 'No se encontraron evaluaciones para exportar.' });
 
     const bundle = buildBulkBundle(evaluations, req.doctor && req.doctor.username);
-    console.log(`[/evaluations/fhir/bulk] ${evaluations.length} evaluación(es) → Bundle FHIR masivo`);
     res.set('Content-Type', 'application/fhir+json');
     res.json(bundle);
   } catch (err) {
@@ -383,7 +381,6 @@ router.get('/:id/fhir', authRequired, async (req, res) => {
       return res.status(404).json({ error: 'Evaluación no encontrada.' });
 
     const bundle = evaluationToFhirBundle(evaluation, req.doctor && req.doctor.username);
-    console.log(`[/evaluations/${req.params.id}/fhir] Bundle FHIR generado — paciente: ${evaluation.patientId}`);
     res.set('Content-Type', 'application/fhir+json');
     res.json(bundle);
   } catch (err) {

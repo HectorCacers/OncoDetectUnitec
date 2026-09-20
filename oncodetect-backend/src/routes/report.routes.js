@@ -89,7 +89,7 @@ router.post('/', async (req, res) => {
       subject: `OncoDetect — Reporte de ${patientName || 'Paciente'} (${evaluationDate || ''})`,
       html:    reportHtml,
     });
-    console.log(`[/send-report] Correo enviado a ${recipientCount} destinatario(s): ${recipientEmail}`);
+    console.log(`[/send-report] Correo enviado a ${recipientCount} destinatario(s) (requestId: ${requestId || 'n/a'}): ${recipientEmail}`);
     res.json({ ok: true, message: `Reporte enviado a ${recipientCount} destinatario(s)` });
   } catch (err) {
     if (requestId) processedRequests.delete(requestId);
