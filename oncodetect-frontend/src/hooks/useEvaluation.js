@@ -14,6 +14,11 @@ import {
 } from "../utils/offlineQueue";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Timeout de 60s para envío de correo: el free tier de Render "duerme" la instancia
+// y el cold start puede tardar ~30-60s. Si se reduce este valor (p. ej. 30000ms),
+// el envío se cancela por timeout, el botón queda en "Enviando..." y el correo se
+// encola como si no hubiera red. NO REDUCIR este valor ni volver a 30000ms.
 const EMAIL_SEND_TIMEOUT_MS = 60000;
 
 const withTimeout = (promise, ms) =>
@@ -138,6 +143,9 @@ export default function useEvaluation() {
       for (const item of items) {
         try {
           if (item.type === "evaluate") {
+            // Ítem encolado offline en handleEvaluate: al recuperar conexión se
+            // recalcula y, si era modo médico con guardado, también se persiste en
+            // el historial. No borrar: es el flujo offline-first de la app.
             const { symptoms, patient_age: patientAge, meta } = item.payload;
             const res = await withTimeout(apiEvaluate(symptoms, patientAge), 20000);
             if (meta?.save && meta.token) {
@@ -149,12 +157,16 @@ export default function useEvaluation() {
               await completeItem(item.id, res.data.results);
             }
           } else if (item.type === "email") {
+            // Mismo timeout de 60s que en handleSendEmail (ver EMAIL_SEND_TIMEOUT_MS):
+            // el cold start de Render puede tardar; no lo reduzcas o el reenvío fallará
+            // por timeout. El requestId del payload evita duplicados en el backend.
             await withTimeout(apiSendReport(item.payload), EMAIL_SEND_TIMEOUT_MS);
             await removeItem(item.id);
           } else {
             await removeItem(item.id);
           }
-        } catch {
+        } catch (err) {
+          console.error(`[syncPendingQueue] Falló el ítem ${item.type} (${item.id}), se reintentará:`, err.message);
           await setItemStatus(item.id, "error");
         }
       }
@@ -370,29 +382,44 @@ export default function useEvaluation() {
         } catch { /* silencioso */ }
       }
       return;
-    } catch {
-      // Sin conexión o el servidor no respondió: guardar en la cola para no perder el trabajo
+    } catch (err) {
       setSpinnerVisible(false);
-      try {
-        await enqueueItem("evaluate", {
-          symptoms,
-          patient_age: ageInYears,
-          patient: {
-            firstName: patientFirstName.trim(),
-            lastName: patientLastName.trim(),
-            identidad: patientIdentidad.trim(),
-            dob: patientDob,
-            depto: patientDepto,
-            municipio: patientMunicipio.trim(),
-          },
-          selectedCareSymptoms: userMode === "cuidador" ? selectedCareSymptoms : undefined,
-          userMode,
-          meta: saveMeta ? { save: saveMeta, token: doctorToken } : null,
-        });
-        await refreshPendingCount();
-        setOfflineMessage("Sin conexión. La evaluación se procesará automáticamente cuando vuelva el internet.");
-      } catch {
-        alert("Error al conectar con el servidor. Verifica tu conexión.");
+      const isOfflineOrSlow =
+        err?.message === "request-timeout" ||
+        !err?.response ||
+        (typeof navigator !== "undefined" && navigator.onLine === false);
+      if (isOfflineOrSlow) {
+        // Sin conexión / servidor lento: guardar en la cola offline (IndexedDB) para
+        // no perder el trabajo. Se procesa en syncPendingQueue al volver el internet y
+        // el banner muestra el contador de pendientes. No borrar esta rama: es el flujo
+        // offline que permite evaluar sin conexión.
+        console.error("[handleEvaluate] Sin conexión o timeout, evaluación encolada:", err.message);
+        try {
+          await enqueueItem("evaluate", {
+            symptoms,
+            patient_age: ageInYears,
+            patient: {
+              firstName: patientFirstName.trim(),
+              lastName: patientLastName.trim(),
+              identidad: patientIdentidad.trim(),
+              dob: patientDob,
+              depto: patientDepto,
+              municipio: patientMunicipio.trim(),
+            },
+            selectedCareSymptoms: userMode === "cuidador" ? selectedCareSymptoms : undefined,
+            userMode,
+            meta: saveMeta ? { save: saveMeta, token: doctorToken } : null,
+          });
+          await refreshPendingCount();
+          setOfflineMessage("Sin conexión. La evaluación se procesará automáticamente cuando vuelva el internet.");
+        } catch {
+          alert("No se pudo guardar sin conexión. Verifica tu conexión.");
+        }
+      } else {
+        // El servidor respondió con un error real (p. ej. 500): no encolar,
+        // mostrar el error real del servidor.
+        console.error("[handleEvaluate] Error del servidor:", err.message);
+        alert(err.response?.data?.error || "Error al evaluar los síntomas.");
       }
     } finally { setLoading(false); }
   }, [ageCalc, selectedSymptoms, selectedCareSymptoms, uniqueCareCodes, userMode,
@@ -436,7 +463,10 @@ export default function useEvaluation() {
         !err?.response ||
         (typeof navigator !== "undefined" && navigator.onLine === false);
       if (isOfflineOrSlow) {
-        // Sin conexión o el servidor tardó demasiado: encolar para reenviar automáticamente
+        // Timeout (cold start de Render) o sin red: encolar para reenviar automáticamente.
+        // El backend deduplica por requestId, así el reenvío no genera correos duplicados.
+        // No alterar esta rama (el timeout de 60s está fijado en EMAIL_SEND_TIMEOUT_MS).
+        console.error("[handleSendEmail] Sin conexión o timeout, correo encolado:", err.message);
         try {
           await enqueueItem("email", payload);
           await refreshPendingCount();
@@ -446,7 +476,8 @@ export default function useEvaluation() {
           setEmailStatus("err");
         }
       } else {
-        // El servidor respondió con error real: no encolar, mostrar el error real
+        // El servidor respondió con un error real (p. ej. 500): no encolar, mostrar el error real
+        console.error("[handleSendEmail] Error del servidor:", err.message);
         setEmailError(
           err.response?.data?.error ||
           err.response?.data?.detail ||
