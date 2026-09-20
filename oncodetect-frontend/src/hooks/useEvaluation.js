@@ -21,11 +21,19 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // encola como si no hubiera red. NO REDUCIR este valor ni volver a 30000ms.
 const EMAIL_SEND_TIMEOUT_MS = 60000;
 
+// Timeout de 60s para evaluar: mismo motivo que el correo (cold start de Render).
+// Con 20s el primer intento online fallaba por timeout y la evaluación se encolaba
+// con el mensaje de "sin conexión" aunque el usuario SÍ tuviera internet. NO REDUCIR.
+const EVALUATE_TIMEOUT_MS = 60000;
+
 const withTimeout = (promise, ms) =>
   Promise.race([
     promise,
     new Promise((_, reject) => setTimeout(() => reject(new Error("request-timeout")), ms)),
   ]);
+
+// Clave de sessionStorage para persistir la sesión (ver "Persistencia de sesión").
+const SESSION_KEY = "oncodetect-session-v1";
 
 export default function useEvaluation() {
   // ── Navigation ──────────────────────────────────────────────────────────────
@@ -132,12 +140,15 @@ export default function useEvaluation() {
   }, []);
 
   // ── Cola offline ─────────────────────────────────────────────────────────────
-  const syncingRef = useRef(false);
+  const syncingRef    = useRef(false);
+  const retryTimerRef = useRef(null);
+  const retryCountRef = useRef(0);
 
   const syncPendingQueue = useCallback(async () => {
     if (syncingRef.current) return;
     if (typeof navigator !== "undefined" && !navigator.onLine) return;
     syncingRef.current = true;
+    let retryableFailure = false;
     try {
       const items = await getPendingItems();
       for (const item of items) {
@@ -147,7 +158,7 @@ export default function useEvaluation() {
             // recalcula y, si era modo médico con guardado, también se persiste en
             // el historial. No borrar: es el flujo offline-first de la app.
             const { symptoms, patient_age: patientAge, meta } = item.payload;
-            const res = await withTimeout(apiEvaluate(symptoms, patientAge), 20000);
+            const res = await withTimeout(apiEvaluate(symptoms, patientAge), EVALUATE_TIMEOUT_MS);
             if (meta?.save && meta.token) {
               await withTimeout(apiSave({ ...meta.save, results: res.data.results }, meta.token), 20000);
             }
@@ -167,6 +178,11 @@ export default function useEvaluation() {
           }
         } catch (err) {
           console.error(`[syncPendingQueue] Falló el ítem ${item.type} (${item.id}), se reintentará:`, err.message);
+          // Timeout (cold start) o error de red sin respuesta: activa el reintento
+          // automático de abajo. Un error real del servidor (con respuesta) no lo activa.
+          if (err?.message === "request-timeout" || (err?.isAxiosError && !err?.response)) {
+            retryableFailure = true;
+          }
           await setItemStatus(item.id, "error");
         }
       }
@@ -175,7 +191,27 @@ export default function useEvaluation() {
       refreshPendingCount();
       refreshCompletedCount();
     }
+    // Reintento automático con backoff: si un ítem falló por cold start de Render,
+    // antes "no se sincronizaba nada" porque el único disparador era el evento online
+    // o recargar la página. Este reintento progresivo hace que la cola se vacíe sola
+    // cuando el backend responde. No quitar esta lógica.
+    if (retryableFailure && retryCountRef.current < 10) {
+      retryCountRef.current += 1;
+      const delay = Math.min(60000, 5000 * 2 ** retryCountRef.current);
+      retryTimerRef.current = setTimeout(() => {
+        if (typeof navigator !== "undefined" && navigator.onLine) syncPendingQueue();
+      }, delay);
+    } else {
+      retryCountRef.current = 0;
+    }
   }, [refreshPendingCount, refreshCompletedCount]);
+
+  // Limpiar el timer de reintento si el componente se desmonta
+  useEffect(() => {
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
+  }, []);
 
   // Cargar pendientes guardados de sesiones anteriores y sincronizar si hay red
   useEffect(() => {
@@ -355,6 +391,55 @@ export default function useEvaluation() {
   const [loading, setLoading]   = useState(false);
   const [results, setResults]   = useState(null);
 
+  // ── Persistencia de sesión (PWA / service worker) ───────────────────────────
+  // El PWA usa registerType 'autoUpdate': al desplegar una versión nueva, el service
+  // worker recarga la página y React se reinicia — eso hacía que la app "regresara a
+  // la página principal de la nada". Guardamos la sesión en sessionStorage para
+  // restaurarla tras cualquier recarga. No eliminar esta lógica.
+  const [sessionHydrated, setSessionHydrated] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(SESSION_KEY);
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s.screen)                     setScreen(s.screen);
+        if (s.userMode)                   setUserMode(s.userMode);
+        if (typeof s.doctorToken === "string")    setDoctorToken(s.doctorToken);
+        if (typeof s.doctorUsername === "string") setDoctorUsername(s.doctorUsername);
+        if (typeof s.patientFirstName === "string") setPatientFirstName(s.patientFirstName);
+        if (typeof s.patientLastName === "string")  setPatientLastName(s.patientLastName);
+        if (typeof s.patientDob === "string")        setPatientDob(s.patientDob);
+        if (typeof s.dobTextInput === "string")      setDobTextInput(s.dobTextInput);
+        if (typeof s.patientIdentidad === "string")  setPatientIdentidad(s.patientIdentidad);
+        if (typeof s.patientDepto === "string")      setPatientDepto(s.patientDepto);
+        if (typeof s.patientMunicipio === "string")  setPatientMunicipio(s.patientMunicipio);
+        if (Array.isArray(s.selectedCancers))       setSelectedCancers(s.selectedCancers);
+        if (Array.isArray(s.selectedSymptoms))      setSelectedSymptoms(s.selectedSymptoms);
+        if (Array.isArray(s.selectedCareSymptoms))  setSelectedCareSymptoms(s.selectedCareSymptoms);
+        if (Array.isArray(s.results) && s.results.length > 0) setResults(s.results);
+      }
+    } catch { /* sesión corrupta o storage bloqueado: empezar limpio */ }
+    setSessionHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!sessionHydrated) return;
+    try {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+        screen, userMode, doctorToken, doctorUsername,
+        patientFirstName, patientLastName, patientDob, dobTextInput,
+        patientIdentidad, patientDepto, patientMunicipio,
+        selectedCancers, selectedSymptoms, selectedCareSymptoms,
+        results,
+      }));
+    } catch { /* storage lleno o bloqueado: ignorar */ }
+  }, [sessionHydrated, screen, userMode, doctorToken, doctorUsername,
+      patientFirstName, patientLastName, patientDob, dobTextInput, patientIdentidad,
+      patientDepto, patientMunicipio, selectedCancers, selectedSymptoms,
+      selectedCareSymptoms, results]);
+
   const handleEvaluate = useCallback(async () => {
     const symptoms = userMode === "medico" ? selectedSymptoms : uniqueCareCodes;
     if (!ageCalc || !symptoms.length) return;
@@ -373,7 +458,7 @@ export default function useEvaluation() {
       : null;
 
     try {
-      const res = await withTimeout(apiEvaluate(symptoms, ageInYears), 20000);
+      const res = await withTimeout(apiEvaluate(symptoms, ageInYears), EVALUATE_TIMEOUT_MS);
       setResults(res.data.results);
       setSpinnerVisible(false); setScreen("results");
       if (saveMeta) {
@@ -384,9 +469,11 @@ export default function useEvaluation() {
       return;
     } catch (err) {
       setSpinnerVisible(false);
+      // Offline = timeout por cold start, error de red axios sin respuesta, o navegador offline.
+      // Un error real del servidor (p. ej. 500 con respuesta) NO va a la cola.
       const isOfflineOrSlow =
         err?.message === "request-timeout" ||
-        !err?.response ||
+        (err?.isAxiosError && !err?.response) ||
         (typeof navigator !== "undefined" && navigator.onLine === false);
       if (isOfflineOrSlow) {
         // Sin conexión / servidor lento: guardar en la cola offline (IndexedDB) para
@@ -440,27 +527,33 @@ export default function useEvaluation() {
       return;
     }
     setEmailStatus("sending"); setEmailError("");
-    const symptoms       = userMode === "medico" ? selectedSymptoms : uniqueCareCodes;
-    const evaluationDate = getNow();
-    const reportHtml     = buildReportHtml(patientData, symptoms, results, userMode, evaluationDate);
-    const requestId      = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const payload = {
-      recipientEmail: email,
-      patientName: patientFullName,
-      patientAge: ageFormatted,
-      symptoms,
-      results,
-      evaluationDate,
-      reportHtml,
-      requestId,
-    };
+    let payload;
     try {
+      // Toda la preparación del payload DENTRO del try: si buildReportHtml u otra cosa
+      // lanza una excepción local, el catch lo captura y no deja el botón congelado en
+      // "Enviando..." para siempre.
+      const symptoms       = userMode === "medico" ? selectedSymptoms : uniqueCareCodes;
+      const evaluationDate = getNow();
+      const reportHtml     = buildReportHtml(patientData, symptoms, results, userMode, evaluationDate);
+      const requestId      = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      payload = {
+        recipientEmail: email,
+        patientName: patientFullName,
+        patientAge: ageFormatted,
+        symptoms,
+        results,
+        evaluationDate,
+        reportHtml,
+        requestId,
+      };
       await withTimeout(apiSendReport(payload), EMAIL_SEND_TIMEOUT_MS);
       setEmailStatus("ok");
     } catch (err) {
+      // Offline = timeout por cold start, error de red axios sin respuesta, o navegador offline.
+      // Un error real del servidor (p. ej. 500 con respuesta) NO se encola: muestra el error.
       const isOfflineOrSlow =
         err?.message === "request-timeout" ||
-        !err?.response ||
+        (err?.isAxiosError && !err?.response) ||
         (typeof navigator !== "undefined" && navigator.onLine === false);
       if (isOfflineOrSlow) {
         // Timeout (cold start de Render) o sin red: encolar para reenviar automáticamente.
