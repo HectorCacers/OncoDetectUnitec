@@ -1,4 +1,8 @@
 require('dotenv').config();
+const dns = require('dns');
+// Render (free) no tiene salida IPv6: toda conexión entrante debe preferir IPv4.
+dns.setDefaultResultOrder('ipv4first');
+
 const express      = require('express');
 const cors         = require('cors');
 const swaggerUi    = require('swagger-ui-express');
@@ -87,3 +91,4 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🔐 Auth JWT activo`);
   console.log(`🗄️  MongoDB: ${process.env.MONGODB_URI ? 'URI cargada' : '⚠️ MONGODB_URI no configurada'}`);
 });
+
