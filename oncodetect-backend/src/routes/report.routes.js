@@ -1,8 +1,46 @@
 const express   = require('express');
 const nodemailer = require('nodemailer');
 const dns       = require('dns');
+const https     = require('https');
 
 const router = express.Router();
+
+// ─── Brevo (HTTPS 443, funciona en Render free donde SMTP está bloqueado) ──────
+function sendViaBrevo({ recipientEmail, patientName, evaluationDate, reportHtml }) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      sender: { name: 'OncoDetect', email: process.env.BREVO_SENDER },
+      to: recipientEmail.split(',').map((e) => ({ email: e.trim() })),
+      subject: `OncoDetect — Reporte de ${patientName || 'Paciente'} (${evaluationDate || ''})`,
+      htmlContent: reportHtml,
+    });
+    const req = https.request({
+      hostname: 'api.brevo.com',
+      path: '/v3/smtp/email',
+      method: 'POST',
+      timeout: 30000,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+        'api-key': process.env.BREVO_API_KEY,
+        accept: 'application/json',
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) return resolve();
+        reject(new Error(`Brevo ${res.statusCode}: ${data.slice(0, 300)}`));
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('Brevo timeout')));
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+// ─── Fallback SMTP Gmail (solo funciona en entornos sin bloqueo SMTP) ──────────
 
 // Render (free) no tiene salida IPv6 y su Node ignora el orden DNS: conectamos a
 // la IP literal IPv4 de smtp.gmail.com para que nunca toque una dirección IPv6.
@@ -116,12 +154,17 @@ router.post('/', async (req, res) => {
       // El cliente reintenta un envío que ya se procesó (timeout de cold start): no duplicar.
       return res.json({ ok: true, duplicated: true, message: `Reporte ya enviado a ${recipientCount} destinatario(s).` });
     }
-    await (await getTransporter()).sendMail({
-      from:    `OncoDetect <${process.env.GMAIL_USER}>`,
-      to:      recipientEmail,
-      subject: `OncoDetect — Reporte de ${patientName || 'Paciente'} (${evaluationDate || ''})`,
-      html:    reportHtml,
-    });
+    if (process.env.BREVO_API_KEY && process.env.BREVO_SENDER) {
+      // Vía HTTPS: evita el bloqueo de puertos SMTP en Render free.
+      await sendViaBrevo({ recipientEmail, patientName, evaluationDate, reportHtml });
+    } else {
+      await (await getTransporter()).sendMail({
+        from:    `OncoDetect <${process.env.GMAIL_USER}>`,
+        to:      recipientEmail,
+        subject: `OncoDetect — Reporte de ${patientName || 'Paciente'} (${evaluationDate || ''})`,
+        html:    reportHtml,
+      });
+    }
     console.log(`[/send-report] Correo enviado a ${recipientCount} destinatario(s) (requestId: ${requestId || 'n/a'}): ${recipientEmail}`);
     res.json({ ok: true, message: `Reporte enviado a ${recipientCount} destinatario(s)` });
   } catch (err) {
@@ -132,3 +175,4 @@ router.post('/', async (req, res) => {
 });
 
 module.exports = router;
+
