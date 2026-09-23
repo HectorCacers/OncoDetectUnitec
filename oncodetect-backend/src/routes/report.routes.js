@@ -4,27 +4,45 @@ const dns       = require('dns');
 
 const router = express.Router();
 
-// Render (free) no tiene salida IPv6: forzamos IPv4 para smtp.gmail.com.
-// El puerto 465 quedaba bloqueado desde Render: usamos 587 con STARTTLS.
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 587,
-  secure: false,
-  requireTLS: true,
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_APP_PASSWORD,
-  },
-  connectionTimeout: 30000,
-  greetingTimeout: 30000,
-  socketTimeout: 60000,
-  lookup: (hostname, opts, cb) => {
-    if (typeof opts === 'function') { cb = opts; opts = {}; }
-    opts.family = 4;
-    opts.all = false;
-    dns.lookup(hostname, opts, cb);
-  },
-});
+// Render (free) no tiene salida IPv6 y su Node ignora el orden DNS: conectamos a
+// la IP literal IPv4 de smtp.gmail.com para que nunca toque una dirección IPv6.
+const SMTP_HOST = 'smtp.gmail.com';
+const SMTP_PORT = 587;
+
+function createTransporter(host) {
+  return nodemailer.createTransport({
+    host,
+    port: SMTP_PORT,
+    secure: false,
+    requireTLS: true,
+    tls: {
+      servername: SMTP_HOST, // el cert valida contra smtp.gmail.com, no la IP
+    },
+    auth: {
+      user: process.env.GMAIL_USER,
+      pass: process.env.GMAIL_APP_PASSWORD,
+    },
+    connectionTimeout: 30000,
+    greetingTimeout: 30000,
+    socketTimeout: 60000,
+  });
+}
+
+let transporter = createTransporter(SMTP_HOST); // fallback por hostname
+let transportReady = null;
+
+function getTransporter() {
+  if (transporter && transportReady === null) {
+    transportReady = new Promise((resolve, reject) => {
+      dns.resolve4(SMTP_HOST, (err, addresses) => {
+        if (err || !addresses || !addresses.length) return resolve(transporter);
+        transporter = createTransporter(addresses[0]); // IP IPv4 literal
+        resolve(transporter);
+      });
+    });
+  }
+  return transportReady || Promise.resolve(transporter);
+}
 
 // Registro en memoria de envíos ya procesados (clave: requestId del cliente).
 // Evita correos duplicados cuando el frontend reintenta un envío de la cola
@@ -98,7 +116,7 @@ router.post('/', async (req, res) => {
       // El cliente reintenta un envío que ya se procesó (timeout de cold start): no duplicar.
       return res.json({ ok: true, duplicated: true, message: `Reporte ya enviado a ${recipientCount} destinatario(s).` });
     }
-    await transporter.sendMail({
+    await (await getTransporter()).sendMail({
       from:    `OncoDetect <${process.env.GMAIL_USER}>`,
       to:      recipientEmail,
       subject: `OncoDetect — Reporte de ${patientName || 'Paciente'} (${evaluationDate || ''})`,
