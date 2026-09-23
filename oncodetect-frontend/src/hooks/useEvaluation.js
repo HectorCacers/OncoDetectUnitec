@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   checkHealth, login, verifyAdmin as apiVerifyAdmin,
   evaluate as apiEvaluate, sendReport as apiSendReport,
@@ -7,8 +7,8 @@ import {
 } from "../services/api";
 import { calcAge, formatAge, getNow, getDateLimits } from "../utils/dateUtils";
 import { buildReportHtml } from "../utils/pdfUtils";
-import { SYMPTOMS_CAREGIVER } from "../data/clinicalData";
 import { evaluateLocally } from "../utils/localEngine";
+import { SYMPTOMS_CAREGIVER } from "../data/clinicalData";
 import {
   enqueueItem, getPendingItems, removeItem, setItemStatus,
   completeItem, getCompletedItems,
@@ -18,20 +18,26 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Timeout de 60s para envío de correo: el free tier de Render "duerme" la instancia
 // y el cold start puede tardar ~30-60s. Si se reduce este valor (p. ej. 30000ms),
-// el envío se cancela por timeout, el botón queda en "Enviando..." y el correo se
-// encola como si no hubiera red. NO REDUCIR este valor ni volver a 30000ms.
+// el correo se encola mientras la petición todavía podría terminar. NO REDUCIR.
 const EMAIL_SEND_TIMEOUT_MS = 60000;
 
-// Timeout de 60s para evaluar: mismo motivo que el correo (cold start de Render).
-// Con 20s el primer intento online fallaba por timeout y la evaluación se encolaba
-// con el mensaje de "sin conexión" aunque el usuario SÍ tuviera internet. NO REDUCIR.
+// Timeout de 60s para migrar ítems antiguos de evaluación que aún no tienen
+// resultados locales. Las evaluaciones nuevas se calculan en el dispositivo.
 const EVALUATE_TIMEOUT_MS = 60000;
 
-const withTimeout = (promise, ms) =>
-  Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error("request-timeout")), ms)),
-  ]);
+const withTimeout = (promise, ms) => {
+  let timerId;
+  const timeout = new Promise((_, reject) => {
+    timerId = setTimeout(
+      () => reject(new Error("request-timeout")),
+      ms
+    );
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    clearTimeout(timerId);
+  });
+};
 
 // Clave de sessionStorage para persistir la sesión (ver "Persistencia de sesión").
 const SESSION_KEY = "oncodetect-session-v1";
@@ -127,16 +133,37 @@ export default function useEvaluation() {
     return () => { cancelled = true; };
   }, []);
 
-  // ── Escuchar cambios de conexión en tiempo real ──────────────────────────────
+  // ── Escuchar cambios de conexión y reanudación de la PWA ────────────────────
   useEffect(() => {
-    const handleOnline  = () => { setIsOnline(true); syncPendingQueue(); };
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener("online",  handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => {
-      window.removeEventListener("online",  handleOnline);
-      window.removeEventListener("offline", handleOffline);
+    const handleOnline = () => {
+      setIsOnline(true);
+      setOfflineMessage("");
+      syncPendingQueue();
     };
+    const handleOffline = () => setIsOnline(false);
+    const handleWake = () => {
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.onLine &&
+        document.visibilityState === "visible"
+      ) {
+        syncPendingQueue();
+      }
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("focus", handleWake);
+    document.addEventListener("visibilitychange", handleWake);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("focus", handleWake);
+      document.removeEventListener("visibilitychange", handleWake);
+    };
+    // syncPendingQueue se declara inmediatamente después y es estable durante
+    // esta fase; el guard de syncingRef evita sincronizaciones superpuestas.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -144,75 +171,149 @@ export default function useEvaluation() {
   const syncingRef    = useRef(false);
   const retryTimerRef = useRef(null);
   const retryCountRef = useRef(0);
+  const activeEmailRequestIdRef = useRef(null);
 
   const syncPendingQueue = useCallback(async () => {
     if (syncingRef.current) return;
-    if (typeof navigator !== "undefined" && !navigator.onLine) return;
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setIsOnline(false);
+      return;
+    }
+
     syncingRef.current = true;
+    setIsOnline(true);
+    setOfflineMessage("");
     let retryableFailure = false;
+
     try {
       const items = await getPendingItems();
+
       for (const item of items) {
         try {
           if (item.type === "evaluate") {
-            // Ítem encolado offline en handleEvaluate: al recuperar conexión se
-            // recalcula y, si era modo médico con guardado, también se persiste en
-            // el historial. No borrar: es el flujo offline-first de la app.
+            // Las evaluaciones nuevas ya se calculan en el dispositivo. Para los
+            // ítems antiguos, conservamos la ruta al backend como compatibilidad.
             const { symptoms, patient_age: patientAge, meta } = item.payload;
-            const res = await withTimeout(apiEvaluate(symptoms, patientAge), EVALUATE_TIMEOUT_MS);
-            if (meta?.save && meta.token) {
-              await withTimeout(apiSave({ ...meta.save, results: res.data.results }, meta.token), 20000);
+            let evaluationResults = item.payload.localResults;
+
+            if (!Array.isArray(evaluationResults)) {
+              const res = await withTimeout(
+                apiEvaluate(symptoms, patientAge),
+                EVALUATE_TIMEOUT_MS
+              );
+              evaluationResults = res.data.results;
             }
-            if (meta?.save) {
+
+            if (meta?.save && meta.token) {
+              await withTimeout(
+                apiSave(
+                  { ...meta.save, results: evaluationResults },
+                  meta.token
+                ),
+                20000
+              );
+              await removeItem(item.id);
+            } else if (Array.isArray(item.payload.localResults)) {
+              // Ya se calculó y se mostró; no requiere otra acción de servidor.
               await removeItem(item.id);
             } else {
-              await completeItem(item.id, res.data.results);
+              // Flujo antiguo de cuidador: conserva el resultado hasta que se vea.
+              await completeItem(item.id, evaluationResults);
             }
           } else if (item.type === "email") {
-            // Mismo timeout de 60s que en handleSendEmail (ver EMAIL_SEND_TIMEOUT_MS):
-            // el cold start de Render puede tardar; no lo reduzcas o el reenvío fallará
-            // por timeout. El requestId del payload evita duplicados en el backend.
-            await withTimeout(apiSendReport(item.payload), EMAIL_SEND_TIMEOUT_MS);
+            // Mismo timeout de handleSendEmail para tolerar el cold start de Render.
+            // El requestId estable permite que el backend deduplique un reintento.
+            await withTimeout(
+              apiSendReport(item.payload),
+              EMAIL_SEND_TIMEOUT_MS
+            );
             await removeItem(item.id);
+
+            if (
+              activeEmailRequestIdRef.current &&
+              activeEmailRequestIdRef.current === item.payload.requestId
+            ) {
+              activeEmailRequestIdRef.current = null;
+              setEmailStatus("ok");
+              setEmailError("");
+            }
           } else {
             await removeItem(item.id);
           }
         } catch (err) {
-          console.error(`[syncPendingQueue] Falló el ítem ${item.type} (${item.id}), se reintentará:`, err.message);
-          // Timeout (cold start) o error de red sin respuesta: activa el reintento
-          // automático de abajo. Un error real del servidor (con respuesta) no lo activa.
-          if (err?.message === "request-timeout" || (err?.isAxiosError && !err?.response)) {
+          console.error(
+            `[syncPendingQueue] Falló el ítem ${item.type} (${item.id}), se reintentará:`,
+            err.message
+          );
+
+          const isNetworkFailure =
+            err?.message === "request-timeout" ||
+            (err?.isAxiosError && !err?.response) ||
+            (typeof navigator !== "undefined" && !navigator.onLine);
+          const isTransientServerError = err?.response?.status >= 500;
+
+          if (isNetworkFailure) {
+            retryableFailure = true;
+          } else if (isTransientServerError) {
             retryableFailure = true;
           }
+
           await setItemStatus(item.id, "error");
+
+          // Si ya no existe red, no esperar 60 s por cada elemento de la cola.
+          // El siguiente evento online, foco o ciclo periódico retomará la cola.
+          if (isNetworkFailure) break;
         }
       }
+    } catch (err) {
+      console.error("[syncPendingQueue] No se pudo leer o procesar la cola:", err);
+      retryableFailure = true;
     } finally {
       syncingRef.current = false;
       refreshPendingCount();
       refreshCompletedCount();
     }
-    // Reintento automático con backoff: si un ítem falló por cold start de Render,
-    // antes "no se sincronizaba nada" porque el único disparador era el evento online
-    // o recargar la página. Este reintento progresivo hace que la cola se vacíe sola
-    // cuando el backend responde. No quitar esta lógica.
+
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+
     if (retryableFailure && retryCountRef.current < 10) {
       retryCountRef.current += 1;
       const delay = Math.min(60000, 5000 * 2 ** retryCountRef.current);
       retryTimerRef.current = setTimeout(() => {
-        if (typeof navigator !== "undefined" && navigator.onLine) syncPendingQueue();
+        if (
+          typeof navigator !== "undefined" &&
+          navigator.onLine &&
+          document.visibilityState === "visible"
+        ) {
+          syncPendingQueue();
+        }
       }, delay);
-    } else {
+    } else if (!retryableFailure) {
       retryCountRef.current = 0;
     }
   }, [refreshPendingCount, refreshCompletedCount]);
 
-  // Limpiar el timer de reintento si el componente se desmonta
+  // Reinicio periódico de seguridad para cuando una PWA móvil reanuda la
+  // ejecución sin emitir nuevamente el evento "online".
   useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.onLine &&
+        document.visibilityState === "visible"
+      ) {
+        syncPendingQueue();
+      }
+    }, 30000);
+
     return () => {
+      window.clearInterval(interval);
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
     };
-  }, []);
+  }, [syncPendingQueue]);
 
   // Cargar pendientes guardados de sesiones anteriores y sincronizar si hay red
   useEffect(() => {
@@ -372,13 +473,13 @@ export default function useEvaluation() {
   const toggleSymptom     = (code) =>   setSelectedSymptoms((p)     => p.includes(code) ? p.filter((s) => s !== code) : [...p, code]);
   const toggleCareSymptom = (id)   =>   setSelectedCareSymptoms((p) => p.includes(id)   ? p.filter((s) => s !== id)   : [...p, id]);
 
-  const uniqueCareCodes = [
+  const uniqueCareCodes = useMemo(() => [
     ...new Set(
-      SYMPTOMS_CAREGIVER.flatMap((g) => g.symptoms)
-        .filter((s) => selectedCareSymptoms.includes(s.id))
-        .flatMap((s) => s.codes)
+      SYMPTOMS_CAREGIVER.flatMap((group) => group.symptoms)
+        .filter((symptom) => selectedCareSymptoms.includes(symptom.id))
+        .flatMap((symptom) => symptom.codes)
     ),
-  ];
+  ], [selectedCareSymptoms]);
 
   // ── Validation ───────────────────────────────────────────────────────────────
   const canProceedAge    = patientFirstName.trim().length > 0 && ageCalc !== null && patientDepto !== ""
@@ -422,7 +523,6 @@ export default function useEvaluation() {
       }
     } catch { /* sesión corrupta o storage bloqueado: empezar limpio */ }
     setSessionHydrated(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -444,8 +544,11 @@ export default function useEvaluation() {
   const handleEvaluate = useCallback(async () => {
     const symptoms = userMode === "medico" ? selectedSymptoms : uniqueCareCodes;
     if (!ageCalc || !symptoms.length) return;
+
     const ageInYears = parseFloat((ageCalc.totalMonths / 12).toFixed(2));
-    setLoading(true); setSpinnerMode("eval"); setSpinnerVisible(true);
+    setLoading(true);
+    setSpinnerMode("eval");
+    setSpinnerVisible(true);
 
     const saveMeta = (userMode === "medico" && patientIdentidad.trim() && doctorToken)
       ? {
@@ -453,56 +556,96 @@ export default function useEvaluation() {
           patientName: patientFullName,
           patientDob,
           patientAge: ageInYears,
-          patientDepto, patientMunicipio,
-          userMode, symptoms,
+          patientDepto,
+          patientMunicipio,
+          userMode,
+          symptoms,
         }
       : null;
 
-    try {
-      const res = await withTimeout(apiEvaluate(symptoms, ageInYears), EVALUATE_TIMEOUT_MS);
-      setResults(res.data.results);
-      setSpinnerVisible(false); setScreen("results");
-      if (saveMeta) {
-        try {
-          await withTimeout(apiSave({ ...saveMeta, results: res.data.results }, doctorToken), 20000);
-        } catch { /* silencioso */ }
+    const calculateLocalResults = () => {
+      try {
+        return evaluateLocally(symptoms);
+      } catch (localError) {
+        console.error("[handleEvaluate] Error en el motor local:", localError);
+        alert("No se pudieron procesar los síntomas seleccionados.");
+        return null;
       }
-      return;
-    } catch (err) {
+    };
+
+    const queueHistory = async (localResults) => {
+      try {
+        await enqueueItem("evaluate", {
+          symptoms,
+          patient_age: ageInYears,
+          localResults,
+          patient: {
+            firstName: patientFirstName.trim(),
+            lastName: patientLastName.trim(),
+            identidad: patientIdentidad.trim(),
+            dob: patientDob,
+            depto: patientDepto,
+            municipio: patientMunicipio.trim(),
+          },
+          userMode,
+          meta: { save: saveMeta, token: doctorToken },
+        });
+        await refreshPendingCount();
+        setOfflineMessage(
+          "Evaluación realizada sin conexión. El historial se sincronizará automáticamente."
+        );
+      } catch {
+        setOfflineMessage(
+          "Evaluación realizada sin conexión; el historial no pudo guardarse en la cola."
+        );
+      }
+    };
+
+    // El motor local es la fuente inmediata para evitar cualquier dependencia
+    // de red. Las pruebas de paridad garantizan que produce exactamente la
+    // misma respuesta que POST /evaluate.
+    const localResults = calculateLocalResults();
+    if (!localResults) {
       setSpinnerVisible(false);
-      // Offline = timeout por cold start, error de red axios sin respuesta, o navegador offline.
-      // Un error real del servidor (p. ej. 500 con respuesta) NO va a la cola.
-      const isOfflineOrSlow =
-        err?.message === "request-timeout" ||
-        (err?.isAxiosError && !err?.response) ||
-        (typeof navigator !== "undefined" && navigator.onLine === false);
-      if (isOfflineOrSlow) {
-        // Sin conexión / servidor lento: la evaluación se calcula LOCALMENTE con el
-        // mismo motor de reglas del backend. Resultados y PDF disponibles al instante.
-        // Solo los correos se encolan (IndexedDB) y se reenvían al recuperar la red.
-        console.error("[handleEvaluate] Sin conexión o timeout, evaluación calculada localmente:", err.message);
-        try {
-          await new Promise((r) => setTimeout(r, 1200)); // pausa mínima para no mostrar un salto brusco
-          const localResults = evaluateLocally(symptoms);
-          setResults(localResults);
-          setSpinnerVisible(false);
-          setOfflineMessage(
-            userMode === "medico"
-              ? "Sin conexión: la evaluación se calculó en este dispositivo. El resultado no quedó guardado en el historial (se necesitará internet)."
-              : "Sin conexión: la evaluación se calculó en este dispositivo. Los correos se enviarán cuando vuelva el internet."
-          );
-          setScreen("results");
-        } catch {
-          alert("No se pudo calcular la evaluación sin conexión. Verifica tu conexión.");
+      setLoading(false);
+      return;
+    }
+
+    setResults(localResults);
+    setSpinnerVisible(false);
+    setScreen("results");
+    // La pantalla ya es utilizable; no bloquear una nueva evaluación mientras
+    // se sincroniza el historial médico en segundo plano.
+    setLoading(false);
+
+    try {
+      if (saveMeta) {
+        const browserIsOffline =
+          typeof navigator !== "undefined" && navigator.onLine === false;
+
+        if (browserIsOffline) {
+          setIsOnline(false);
+          await queueHistory(localResults);
+        } else {
+          try {
+            await withTimeout(
+              apiSave({ ...saveMeta, results: localResults }, doctorToken),
+              20000
+            );
+          } catch (err) {
+            const isOfflineOrSlow =
+              err?.message === "request-timeout" ||
+              (err?.isAxiosError && !err?.response) ||
+              (typeof navigator !== "undefined" && navigator.onLine === false);
+
+            if (isOfflineOrSlow) await queueHistory(localResults);
+          }
         }
-      } else {
-        // El servidor respondió con un error real (p. ej. 500): no encolar,
-        // mostrar el error real del servidor.
-        console.error("[handleEvaluate] Error del servidor:", err.message);
-        alert(err.response?.data?.error || "Error al evaluar los síntomas.");
       }
-    } finally { setLoading(false); }
-  }, [ageCalc, selectedSymptoms, selectedCareSymptoms, uniqueCareCodes, userMode,
+    } finally {
+      setLoading(false);
+    }
+  }, [ageCalc, selectedSymptoms, uniqueCareCodes, userMode,
       patientIdentidad, patientFirstName, patientLastName, patientDob, patientDepto,
       patientMunicipio, doctorToken, patientFullName, refreshPendingCount]);
 
@@ -516,6 +659,7 @@ export default function useEvaluation() {
     if (!email || !results) return;
     const emails = email.split(",").map((e) => e.trim()).filter(Boolean);
     if (emails.some((e) => !EMAIL_RE.test(e))) {
+      setEmailError("Revise las direcciones de correo.");
       setEmailStatus("err");
       return;
     }
@@ -539,9 +683,31 @@ export default function useEvaluation() {
         reportHtml,
         requestId,
       };
+      activeEmailRequestIdRef.current = requestId;
+
+      // Si el navegador ya está sin red, guardar directamente. Así el botón
+      // responde de inmediato y el envío queda durable en IndexedDB.
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        await enqueueItem("email", payload);
+        await refreshPendingCount();
+        setEmailStatus("queued");
+        setOfflineMessage(
+          "Sin conexión. El correo se enviará automáticamente cuando vuelva el internet."
+        );
+        return;
+      }
+
       await withTimeout(apiSendReport(payload), EMAIL_SEND_TIMEOUT_MS);
+      activeEmailRequestIdRef.current = null;
       setEmailStatus("ok");
     } catch (err) {
+      if (!payload) {
+        activeEmailRequestIdRef.current = null;
+        setEmailError("No se pudo preparar el reporte para enviarlo.");
+        setEmailStatus("err");
+        return;
+      }
+
       // Offline = timeout por cold start, error de red axios sin respuesta, o navegador offline.
       // Un error real del servidor (p. ej. 500 con respuesta) NO se encola: muestra el error.
       const isOfflineOrSlow =
@@ -559,10 +725,15 @@ export default function useEvaluation() {
           setEmailStatus("queued");
           setOfflineMessage("Sin conexión. El correo se enviará automáticamente cuando vuelva el internet.");
         } catch {
+          activeEmailRequestIdRef.current = null;
+          setEmailError(
+            "No se pudo guardar el correo en la cola. Intenta de nuevo cuando tengas conexión."
+          );
           setEmailStatus("err");
         }
       } else {
         // El servidor respondió con un error real (p. ej. 500): no encolar, mostrar el error real
+        activeEmailRequestIdRef.current = null;
         console.error("[handleSendEmail] Error del servidor:", err.message);
         setEmailError(
           err.response?.data?.error ||
@@ -629,11 +800,12 @@ export default function useEvaluation() {
       setIsViewingCompleted(false);
       removeItem(id).finally(() => refreshCompletedCount());
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, refreshCompletedCount]);
 
   // ── Reset ────────────────────────────────────────────────────────────────────
   const handleReset = () => {
+    activeEmailRequestIdRef.current = null;
+    setLoading(false);
     setScreen("form");
     setPatientFirstName(""); setPatientLastName(""); setPatientDob(""); setDobTextInput("");
     setPatientIdentidad(""); setPatientDepto(""); setPatientMunicipio("");

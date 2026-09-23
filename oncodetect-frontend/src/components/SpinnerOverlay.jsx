@@ -41,7 +41,7 @@ export default function SpinnerOverlay({ visible, mode = "nav" }) {
       setTimeout(() => setShow(false), 520);
     }
     return () => clearInterval(intervalRef.current);
-  }, [visible]);
+  }, [visible, msgs]);
 
   if (!show) return null;
   return (

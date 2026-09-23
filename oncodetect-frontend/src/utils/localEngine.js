@@ -1,9 +1,13 @@
-import matrix from "../data/oncodetect_matrix_v1.json";
+import matrix from "../data/oncodetect_matrix_v1.json" with { type: "json" };
 
 // Motor de reglas local — réplica exacta de oncodetect-backend/src/engine/engine.js
 // + del mapeo de src/routes/evaluate.routes.js. Permite evaluar sin conexión y
 // genera el MISMO formato de resultados que POST /evaluate.
 export function evaluateLocally(selectedSymptoms) {
+  if (!Array.isArray(selectedSymptoms)) {
+    throw new TypeError("selectedSymptoms debe ser un array.");
+  }
+
   const results = [];
 
   for (const cancer of matrix.cancers) {

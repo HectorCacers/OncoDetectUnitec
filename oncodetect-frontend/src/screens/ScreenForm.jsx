@@ -14,7 +14,6 @@ export default function ScreenForm({ state }) {
     setScreen,
     withSpinner,
     doctorToken,
-    doctorUsername,
     handleLogout,
     loadRecentEvals,
     setHistorialScreen,
