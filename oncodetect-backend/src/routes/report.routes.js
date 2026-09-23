@@ -1,13 +1,26 @@
 const express   = require('express');
 const nodemailer = require('nodemailer');
+const dns       = require('dns');
 
 const router = express.Router();
 
+// Render (free) no tiene salida IPv6: forzamos IPv4 para smtp.gmail.com.
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true,
   auth: {
     user: process.env.GMAIL_USER,
     pass: process.env.GMAIL_APP_PASSWORD,
+  },
+  connectionTimeout: 30000,
+  greetingTimeout: 30000,
+  socketTimeout: 60000,
+  lookup: (hostname, opts, cb) => {
+    if (typeof opts === 'function') { cb = opts; opts = {}; }
+    opts.family = 4;
+    opts.all = false;
+    dns.lookup(hostname, opts, cb);
   },
 });
 
