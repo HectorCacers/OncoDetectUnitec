@@ -5,10 +5,12 @@ const dns       = require('dns');
 const router = express.Router();
 
 // Render (free) no tiene salida IPv6: forzamos IPv4 para smtp.gmail.com.
+// El puerto 465 quedaba bloqueado desde Render: usamos 587 con STARTTLS.
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
+  port: 587,
+  secure: false,
+  requireTLS: true,
   auth: {
     user: process.env.GMAIL_USER,
     pass: process.env.GMAIL_APP_PASSWORD,
