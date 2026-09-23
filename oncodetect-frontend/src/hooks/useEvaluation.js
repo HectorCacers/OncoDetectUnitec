@@ -8,6 +8,7 @@ import {
 import { calcAge, formatAge, getNow, getDateLimits } from "../utils/dateUtils";
 import { buildReportHtml } from "../utils/pdfUtils";
 import { SYMPTOMS_CAREGIVER } from "../data/clinicalData";
+import { evaluateLocally } from "../utils/localEngine";
 import {
   enqueueItem, getPendingItems, removeItem, setItemStatus,
   completeItem, getCompletedItems,
@@ -476,31 +477,23 @@ export default function useEvaluation() {
         (err?.isAxiosError && !err?.response) ||
         (typeof navigator !== "undefined" && navigator.onLine === false);
       if (isOfflineOrSlow) {
-        // Sin conexión / servidor lento: guardar en la cola offline (IndexedDB) para
-        // no perder el trabajo. Se procesa en syncPendingQueue al volver el internet y
-        // el banner muestra el contador de pendientes. No borrar esta rama: es el flujo
-        // offline que permite evaluar sin conexión.
-        console.error("[handleEvaluate] Sin conexión o timeout, evaluación encolada:", err.message);
+        // Sin conexión / servidor lento: la evaluación se calcula LOCALMENTE con el
+        // mismo motor de reglas del backend. Resultados y PDF disponibles al instante.
+        // Solo los correos se encolan (IndexedDB) y se reenvían al recuperar la red.
+        console.error("[handleEvaluate] Sin conexión o timeout, evaluación calculada localmente:", err.message);
         try {
-          await enqueueItem("evaluate", {
-            symptoms,
-            patient_age: ageInYears,
-            patient: {
-              firstName: patientFirstName.trim(),
-              lastName: patientLastName.trim(),
-              identidad: patientIdentidad.trim(),
-              dob: patientDob,
-              depto: patientDepto,
-              municipio: patientMunicipio.trim(),
-            },
-            selectedCareSymptoms: userMode === "cuidador" ? selectedCareSymptoms : undefined,
-            userMode,
-            meta: saveMeta ? { save: saveMeta, token: doctorToken } : null,
-          });
-          await refreshPendingCount();
-          setOfflineMessage("Sin conexión. La evaluación se procesará automáticamente cuando vuelva el internet.");
+          await new Promise((r) => setTimeout(r, 1200)); // pausa mínima para no mostrar un salto brusco
+          const localResults = evaluateLocally(symptoms);
+          setResults(localResults);
+          setSpinnerVisible(false);
+          setOfflineMessage(
+            userMode === "medico"
+              ? "Sin conexión: la evaluación se calculó en este dispositivo. El resultado no quedó guardado en el historial (se necesitará internet)."
+              : "Sin conexión: la evaluación se calculó en este dispositivo. Los correos se enviarán cuando vuelva el internet."
+          );
+          setScreen("results");
         } catch {
-          alert("No se pudo guardar sin conexión. Verifica tu conexión.");
+          alert("No se pudo calcular la evaluación sin conexión. Verifica tu conexión.");
         }
       } else {
         // El servidor respondió con un error real (p. ej. 500): no encolar,
